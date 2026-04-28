@@ -18,6 +18,7 @@ const ICON_SIZE = 22;
 const Z_BASE = 2147483640;
 
 const ATTR_HOOKED = "data-localpass-hooked";
+const ATTR_ORIG_AUTOCOMPLETE = "data-localpass-orig-autocomplete";
 
 let activeIndicator: HTMLElement | null = null;
 let activeDropdown: HTMLElement | null = null;
@@ -44,9 +45,26 @@ function refreshCache(): Promise<QueryResult> {
 
 // ---------- detection ----------
 
-function isInteractableInput(node: Element | null): node is HTMLInputElement {
+/**
+ * Attribute-only candidate check. Doesn't query layout — safe to call right
+ * after a node is inserted, before Gmail-style late-rendered inputs have a
+ * non-zero bounding box.
+ */
+function isCandidateInput(node: Element | null): node is HTMLInputElement {
   if (!(node instanceof HTMLInputElement)) return false;
   if (node.disabled || node.readOnly) return false;
+  // Hidden / type=hidden inputs aren't candidates, but `display:none` should
+  // be checked at UI time, not here — Gmail wraps fields in containers that
+  // are display:none for a tick.
+  if (node.type === "hidden") return false;
+  return true;
+}
+
+/**
+ * Layout / visibility check. Use before showing the LocalPass indicator or
+ * dropdown so we don't decorate honeypot fields or 0-size traps.
+ */
+function isVisibleEnough(node: HTMLInputElement): boolean {
   const style = window.getComputedStyle(node);
   if (style.display === "none" || style.visibility === "hidden") return false;
   const rect = node.getBoundingClientRect();
@@ -55,7 +73,7 @@ function isInteractableInput(node: Element | null): node is HTMLInputElement {
 }
 
 function isPasswordInput(node: Element | null): node is HTMLInputElement {
-  return isInteractableInput(node) && node.type === "password";
+  return isCandidateInput(node) && node.type === "password";
 }
 
 /**
@@ -64,13 +82,16 @@ function isPasswordInput(node: Element | null): node is HTMLInputElement {
  * otherwise fall back to keyword matching across name/id/aria/placeholder.
  */
 function isUsernameLikeInput(node: Element | null): node is HTMLInputElement {
-  if (!isInteractableInput(node)) return false;
+  if (!isCandidateInput(node)) return false;
   const t = node.type;
   if (t === "password") return false;
   if (t !== "text" && t !== "email" && t !== "tel" && t !== "") return false;
 
   const ac = (node.getAttribute("autocomplete") || "").toLowerCase();
-  if (/(^|\s)(username|email)(\s|$)/.test(ac)) return true;
+  // autocomplete is space-separated tokens; check membership rather than a
+  // strict word boundary, so values like "username webauthn" still match.
+  const acTokens = ac.split(/\s+/);
+  if (acTokens.includes("username") || acTokens.includes("email")) return true;
   if (t === "email") return true;
 
   const tokens = [
@@ -83,11 +104,21 @@ function isUsernameLikeInput(node: Element | null): node is HTMLInputElement {
     .join(" ")
     .toLowerCase();
 
-  return /\b(user(name)?|email|login|account|signin)\b/.test(tokens);
+  return /\b(user(name)?|email|login|account|signin|identifier)\b/.test(tokens);
 }
 
 function isAutofillTarget(node: Element | null): node is HTMLInputElement {
   return isPasswordInput(node) || isUsernameLikeInput(node);
+}
+
+function suppressNativeAutocomplete(input: HTMLInputElement) {
+  const orig = input.getAttribute("autocomplete");
+  if (orig !== null && !input.hasAttribute(ATTR_ORIG_AUTOCOMPLETE)) {
+    input.setAttribute(ATTR_ORIG_AUTOCOMPLETE, orig);
+  }
+  if (input.getAttribute("autocomplete") !== "off") {
+    input.setAttribute("autocomplete", "off");
+  }
 }
 
 function findUsernameInput(passwordInput: HTMLInputElement): HTMLInputElement | null {
@@ -537,8 +568,16 @@ function attachTo(input: HTMLInputElement) {
   if (input.getAttribute(ATTR_HOOKED) === "1") return;
   input.setAttribute(ATTR_HOOKED, "1");
 
+  // Suppress the native browser credential dropdown so it doesn't overlay our
+  // suggestions. Firefox's dropdown is rendered by the browser chrome, so
+  // z-index can't win — we have to opt out at the source. Stash the original
+  // attribute in case site code reads it, but don't restore: autocomplete
+  // doesn't affect form submission, only the browser UI we're suppressing.
+  suppressNativeAutocomplete(input);
+
   const onFocus = () => {
     if (!isAutofillTarget(input)) return;
+    if (!isVisibleEnough(input)) return;
     activeField = input;
     clearIndicator();
     activeIndicator = createIndicator(input);
@@ -603,8 +642,36 @@ browser.runtime.onMessage.addListener((message: unknown) => {
 
 // initial + observe
 scan();
+
+// Just-in-time fallback: if a framework injected an input we missed (no
+// MutationObserver event, e.g. a re-parented element), hook it the moment the
+// user actually focuses it. The hooked attr keeps this idempotent.
+document.addEventListener(
+  "focusin",
+  (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    if (target.getAttribute(ATTR_HOOKED) === "1") return;
+    if (!isAutofillTarget(target)) return;
+    attachTo(target);
+  },
+  true,
+);
+
 const observer = new MutationObserver((mutations) => {
   for (const m of mutations) {
+    if (m.type === "attributes" && m.attributeName === "autocomplete") {
+      const t = m.target;
+      if (
+        t instanceof HTMLInputElement &&
+        t.getAttribute(ATTR_HOOKED) === "1" &&
+        t.getAttribute("autocomplete") !== "off"
+      ) {
+        // Page code overwrote it — reapply.
+        suppressNativeAutocomplete(t);
+      }
+      continue;
+    }
     m.addedNodes.forEach((n) => {
       if (n instanceof HTMLElement) {
         if (n instanceof HTMLInputElement && isAutofillTarget(n)) {
@@ -616,7 +683,12 @@ const observer = new MutationObserver((mutations) => {
     });
   }
 });
-observer.observe(document.documentElement, { childList: true, subtree: true });
+observer.observe(document.documentElement, {
+  childList: true,
+  subtree: true,
+  attributes: true,
+  attributeFilter: ["autocomplete"],
+});
 
 window.addEventListener("resize", () => {
   if (activeIndicator && activeField) positionOverPasswordField(activeIndicator, activeField);

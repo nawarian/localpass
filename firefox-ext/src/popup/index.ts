@@ -6,9 +6,9 @@
  */
 
 import type { Config, Entry, Vault } from "@localpass/core";
-import { s3Download } from "@localpass/core/dist/s3.js";
-import { loadStore } from "@localpass/core/dist/store.js";
-import { listKeys, getEntry } from "@localpass/core/dist/vault.js";
+import { s3Download, s3Upload } from "@localpass/core/dist/s3.js";
+import { loadStore, saveStore } from "@localpass/core/dist/store.js";
+import { listKeys, getEntry, addEntry, deleteEntry } from "@localpass/core/dist/vault.js";
 
 type UIState = "no_config" | "no_vault" | "locked" | "unlocked";
 
@@ -24,8 +24,23 @@ const app = document.getElementById("app")!;
 
 let uiState: UIState = "locked";
 let vault: Vault | null = null;
+let masterPassword: string | null = null;
 let selectedKey: string | null = null;
 let searchQuery = "";
+
+interface EditDraft {
+  originalKey: string | null; // null for a new entry
+  key: string;
+  username: string;
+  password: string;
+  website: string;
+  notes: string;
+  custom: { id: number; name: string; value: string }[];
+  createdAt: string | null;
+}
+
+let editDraft: EditDraft | null = null;
+let nextCustomId = 1;
 
 // ---------- settings & session cache ----------
 
@@ -38,23 +53,33 @@ async function getSettings(): Promise<Settings> {
   };
 }
 
-async function loadCachedVault(): Promise<Vault | null> {
+interface CachedVault {
+  vault: Vault;
+  masterPassword: string;
+  expiresAt: number;
+}
+
+async function loadCachedVault(): Promise<{ vault: Vault; masterPassword: string } | null> {
   const result = await browser.storage.session.get(SESSION_VAULT_KEY);
-  const cached = result[SESSION_VAULT_KEY] as { vault: Vault; expiresAt: number } | undefined;
+  const cached = result[SESSION_VAULT_KEY] as CachedVault | undefined;
   if (!cached) return null;
   if (Date.now() >= cached.expiresAt) {
     await browser.storage.session.remove(SESSION_VAULT_KEY);
     return null;
   }
-  return cached.vault;
+  // Older cache shape (pre-edit support) had no masterPassword. Treat as locked.
+  if (typeof cached.masterPassword !== "string" || !cached.masterPassword) {
+    await browser.storage.session.remove(SESSION_VAULT_KEY);
+    return null;
+  }
+  return { vault: cached.vault, masterPassword: cached.masterPassword };
 }
 
-async function saveCachedVault(v: Vault): Promise<void> {
+async function saveCachedVault(v: Vault, password: string): Promise<void> {
   const settings = await getSettings();
   const expiresAt = Date.now() + settings.autoLockMinutes * 60_000;
-  await browser.storage.session.set({
-    [SESSION_VAULT_KEY]: { vault: v, expiresAt },
-  });
+  const payload: CachedVault = { vault: v, masterPassword: password, expiresAt };
+  await browser.storage.session.set({ [SESSION_VAULT_KEY]: payload });
 }
 
 async function clearCachedVault(): Promise<void> {
@@ -178,7 +203,11 @@ async function determineInitialState(): Promise<UIState> {
 
 async function refresh() {
   if (!vault) {
-    vault = await loadCachedVault();
+    const cached = await loadCachedVault();
+    if (cached) {
+      vault = cached.vault;
+      masterPassword = cached.masterPassword;
+    }
   }
   if (vault) {
     uiState = "unlocked";
@@ -186,6 +215,8 @@ async function refresh() {
   } else {
     uiState = await determineInitialState();
     selectedKey = null;
+    editDraft = null;
+    masterPassword = null;
   }
   render();
 }
@@ -304,7 +335,8 @@ function renderLocked(): HTMLElement {
         return;
       }
       vault = await loadStore(base64ToBytes(b64), pwInput.value);
-      await saveCachedVault(vault);
+      masterPassword = pwInput.value;
+      await saveCachedVault(vault, masterPassword);
       await maybeRequestSitesPermission();
       await refresh();
     } catch (err) {
@@ -338,13 +370,25 @@ function renderUnlocked(): HTMLElement {
   // Sidebar
   const sidebar = el("div", { class: "w-[200px] border-r border-border bg-surface flex flex-col min-h-0" });
 
-  sidebar.append(
-    el("div", { class: "px-3 py-2.5 border-b border-border flex items-center gap-2 text-sm" },
-      iconList("w-4 h-4 text-text-muted"),
-      el("span", { class: "font-medium" }, "All Items"),
-      el("span", { class: "ml-auto text-xs text-text-dim" }, String(keys.length))
-    )
+  const sidebarHeader = el("div", {
+    class: "px-3 py-2.5 border-b border-border flex items-center gap-2 text-sm",
+  });
+  sidebarHeader.append(
+    iconList("w-4 h-4 text-text-muted"),
+    el("span", { class: "font-medium" }, "All Items"),
+    el("span", { class: "ml-2 text-xs text-text-dim" }, String(keys.length)),
   );
+  const newBtn = el("button", {
+    class: "ml-auto text-text-muted hover:text-text p-1 rounded hover:bg-surface-2",
+    title: "New item",
+  }, iconPlus("w-4 h-4"));
+  newBtn.addEventListener("click", () => {
+    selectedKey = null;
+    editDraft = newDraft();
+    render();
+  });
+  sidebarHeader.append(newBtn);
+  sidebar.append(sidebarHeader);
 
   const list = el("ul", { class: "flex-1 overflow-y-auto py-1" });
 
@@ -387,7 +431,9 @@ function renderUnlocked(): HTMLElement {
     );
     btn.append(avatar, text);
     btn.addEventListener("click", () => {
+      if (editDraft && !confirmDiscardDraft()) return;
       selectedKey = key;
+      editDraft = null;
       render();
     });
     li.append(btn);
@@ -405,6 +451,11 @@ function renderUnlocked(): HTMLElement {
 
 function renderDetailPane(): HTMLElement {
   const pane = el("div", { class: "flex-1 min-w-0 flex flex-col bg-bg" });
+
+  if (editDraft) {
+    pane.append(renderEditPane());
+    return pane;
+  }
 
   const entry: Entry | undefined = selectedKey && vault ? getEntry(vault, selectedKey) : undefined;
 
@@ -441,14 +492,25 @@ function renderDetailPane(): HTMLElement {
       class: "text-xs text-text-muted bg-surface-2 px-2 py-0.5 rounded-full border border-border",
     }, "Personal"),
   );
+  const editBtn = el("button", {
+    class: "ml-auto text-text-muted hover:text-text p-1.5 rounded-md hover:bg-surface-2",
+    title: "Edit item",
+  }, iconPencil("w-4 h-4"));
+  editBtn.addEventListener("click", () => {
+    if (!vault || !selectedKey) return;
+    const e = getEntry(vault, selectedKey);
+    if (!e) return;
+    editDraft = entryToDraft(selectedKey, e);
+    render();
+  });
   const fillBtn = el("button", {
-    class: "ml-auto text-xs font-medium border border-accent/60 text-accent hover:bg-accent hover:text-white rounded-full px-3 py-1 transition-colors",
+    class: "text-xs font-medium border border-accent/60 text-accent hover:bg-accent hover:text-white rounded-full px-3 py-1 transition-colors",
   }, "Open & Fill");
   fillBtn.addEventListener("click", () => {
     if (website) browser.tabs.create({ url: ensureHttp(website) });
     if (password) void copyToClipboard(password, "Password");
   });
-  header.append(fillBtn);
+  header.append(editBtn, fillBtn);
   pane.append(header);
 
   const body = el("div", { class: "flex-1 overflow-y-auto p-4 space-y-3" });
@@ -495,6 +557,151 @@ function renderDetailPane(): HTMLElement {
 
   pane.append(body);
   return pane;
+}
+
+function confirmDiscardDraft(): boolean {
+  return confirm("Discard unsaved changes?");
+}
+
+function renderEditPane(): HTMLElement {
+  const draft = editDraft!;
+  const pane = el("div", { class: "flex-1 min-w-0 flex flex-col bg-bg" });
+
+  const isNew = draft.originalKey === null;
+
+  // Header
+  const header = el("div", { class: "px-4 py-3 border-b border-border flex items-center gap-2" });
+  header.append(
+    el("span", { class: "text-sm font-medium" }, isNew ? "New item" : "Edit item"),
+  );
+  const cancelBtn = el("button", {
+    class: "ml-auto text-xs font-medium border border-border hover:border-border-strong rounded-full px-3 py-1 transition-colors",
+  }, "Cancel");
+  cancelBtn.addEventListener("click", () => {
+    editDraft = null;
+    render();
+  });
+  const saveBtn = el("button", {
+    class: "text-xs font-medium bg-accent hover:bg-accent-hover text-white rounded-full px-3 py-1 transition-colors",
+  }, "Save");
+  saveBtn.addEventListener("click", () => void saveDraft());
+  header.append(cancelBtn, saveBtn);
+  pane.append(header);
+
+  const body = el("div", { class: "flex-1 overflow-y-auto p-4 space-y-3" });
+
+  body.append(renderEditInput("Name", draft.key, (v) => { draft.key = v; }, { placeholder: "e.g. github.com" }));
+  body.append(renderEditInput("Username", draft.username, (v) => { draft.username = v; }));
+  body.append(renderEditInput("Password", draft.password, (v) => { draft.password = v; }, { secret: true }));
+  body.append(renderEditInput("Website", draft.website, (v) => { draft.website = v; }, { placeholder: "https://example.com" }));
+  body.append(renderEditTextarea("Notes", draft.notes, (v) => { draft.notes = v; }));
+
+  // Custom fields
+  const customSection = el("div", { class: "rounded-lg bg-surface border border-border" });
+  const customHeader = el("div", {
+    class: "px-3 py-2 flex items-center border-b border-border",
+  });
+  customHeader.append(
+    el("span", { class: "text-[11px] uppercase tracking-wider text-text-muted" }, "Custom fields"),
+  );
+  const addFieldBtn = el("button", {
+    class: "ml-auto text-xs text-accent hover:text-accent-hover",
+  }, "+ Add field");
+  addFieldBtn.addEventListener("click", () => {
+    draft.custom.push({ id: nextCustomId++, name: "", value: "" });
+    render();
+  });
+  customHeader.append(addFieldBtn);
+  customSection.append(customHeader);
+
+  if (draft.custom.length === 0) {
+    customSection.append(
+      el("div", { class: "px-3 py-3 text-xs text-text-dim" }, "No custom fields."),
+    );
+  } else {
+    for (const f of draft.custom) {
+      const row = el("div", { class: "px-3 py-2 flex items-center gap-2 border-b border-border last:border-b-0" });
+      const nameIn = el("input", {
+        type: "text",
+        placeholder: "field name",
+        value: f.name,
+        class: "w-32 bg-surface-2 border border-border focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 rounded px-2 py-1 text-xs",
+      }) as HTMLInputElement;
+      nameIn.addEventListener("input", () => { f.name = nameIn.value; });
+      const valIn = el("input", {
+        type: "text",
+        placeholder: "value",
+        value: f.value,
+        class: "flex-1 min-w-0 bg-surface-2 border border-border focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 rounded px-2 py-1 text-xs font-mono",
+      }) as HTMLInputElement;
+      valIn.addEventListener("input", () => { f.value = valIn.value; });
+      const removeBtn = el("button", {
+        class: "text-text-muted hover:text-red-400 p-1 rounded",
+        title: "Remove field",
+      }, iconTrash("w-4 h-4"));
+      removeBtn.addEventListener("click", () => {
+        draft.custom = draft.custom.filter((c) => c.id !== f.id);
+        render();
+      });
+      row.append(nameIn, valIn, removeBtn);
+      customSection.append(row);
+    }
+  }
+  body.append(customSection);
+
+  if (!isNew) {
+    const dangerZone = el("div", { class: "pt-2" });
+    const delBtn = el("button", {
+      class: "w-full text-sm font-medium border border-red-500/40 text-red-400 hover:bg-red-500 hover:text-white rounded-lg px-3 py-2 transition-colors",
+    }, "Delete item");
+    delBtn.addEventListener("click", () => void deleteSelected());
+    dangerZone.append(delBtn);
+    body.append(dangerZone);
+  }
+
+  pane.append(body);
+  return pane;
+}
+
+function renderEditInput(
+  label: string,
+  value: string,
+  onInput: (v: string) => void,
+  opts: { placeholder?: string; secret?: boolean } = {},
+): HTMLElement {
+  const wrap = el("label", { class: "block" });
+  wrap.append(
+    el("span", { class: "text-[11px] uppercase tracking-wider text-text-muted" }, label),
+  );
+  const input = el("input", {
+    type: opts.secret ? "password" : "text",
+    autocomplete: "off",
+    placeholder: opts.placeholder ?? "",
+    value,
+    class: "mt-1 w-full bg-surface-2 border border-border focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 rounded-lg px-3 py-2 text-sm placeholder:text-text-dim font-mono",
+  }) as HTMLInputElement;
+  input.addEventListener("input", () => onInput(input.value));
+  wrap.append(input);
+  return wrap;
+}
+
+function renderEditTextarea(
+  label: string,
+  value: string,
+  onInput: (v: string) => void,
+): HTMLElement {
+  const wrap = el("label", { class: "block" });
+  wrap.append(
+    el("span", { class: "text-[11px] uppercase tracking-wider text-text-muted" }, label),
+  );
+  const ta = el("textarea", {
+    rows: "3",
+    class: "mt-1 w-full bg-surface-2 border border-border focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 rounded-lg px-3 py-2 text-sm placeholder:text-text-dim resize-y",
+  }) as HTMLTextAreaElement;
+  ta.value = value;
+  ta.addEventListener("input", () => onInput(ta.value));
+  wrap.append(ta);
+  return wrap;
 }
 
 function renderField(label: string, value: string, secret: boolean): HTMLElement {
@@ -577,8 +784,10 @@ function renderTopBar(): HTMLElement {
   }, iconLock("w-4 h-4"));
   lock.addEventListener("click", async () => {
     vault = null;
+    masterPassword = null;
     selectedKey = null;
     searchQuery = "";
+    editDraft = null;
     await clearCachedVault();
     await refresh();
   });
@@ -623,6 +832,161 @@ function primaryButton(label: string, onClick: () => void): HTMLButtonElement {
   btn.textContent = label;
   btn.addEventListener("click", onClick);
   return btn;
+}
+
+// ---------- edit / persist / push ----------
+
+function entryToDraft(key: string, entry: Entry): EditDraft {
+  const meta = { ...(entry.metadata || {}) };
+  const username = meta["username"] ?? meta["email"] ?? "";
+  const password = meta["password"] ?? "";
+  const website = meta["url"] ?? meta["website"] ?? "";
+  const notes = meta["notes"] ?? "";
+  const standard = new Set(["username", "email", "password", "url", "website", "notes"]);
+  const custom = Object.entries(meta)
+    .filter(([k]) => !standard.has(k))
+    .map(([name, value]) => ({ id: nextCustomId++, name, value }));
+  return {
+    originalKey: key,
+    key,
+    username,
+    password,
+    website,
+    notes,
+    custom,
+    createdAt: entry.created_at,
+  };
+}
+
+function newDraft(): EditDraft {
+  return {
+    originalKey: null,
+    key: "",
+    username: "",
+    password: "",
+    website: "",
+    notes: "",
+    custom: [],
+    createdAt: null,
+  };
+}
+
+function draftToEntry(draft: EditDraft, prevCreatedAt: string | null): Entry {
+  const metadata: Record<string, string> = {};
+  if (draft.username) metadata["username"] = draft.username;
+  if (draft.password) metadata["password"] = draft.password;
+  if (draft.website) metadata["url"] = draft.website;
+  if (draft.notes) metadata["notes"] = draft.notes;
+  for (const f of draft.custom) {
+    const name = f.name.trim();
+    if (!name) continue;
+    metadata[name] = f.value;
+  }
+  const now = new Date().toISOString();
+  return {
+    metadata,
+    created_at: prevCreatedAt ?? now,
+    updated_at: now,
+  };
+}
+
+async function persistVault(): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!vault || !masterPassword) {
+    return { ok: false, error: "Vault is locked." };
+  }
+  try {
+    const bytes = await saveStore(vault, masterPassword);
+    await send("VAULT_BYTES_SET", { b64: bytesToBase64(bytes), keepSession: true });
+    await saveCachedVault(vault, masterPassword);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+}
+
+async function pushToS3(): Promise<{ ok: true } | { ok: false; error: string }> {
+  const cfg = await send<Config | null>("CONFIG_GET");
+  if (!cfg) return { ok: false, error: "No config saved." };
+  if (!cfg.s3_bucket || !cfg.s3_key || !cfg.aws_access_key_id || !cfg.aws_secret_access_key) {
+    return { ok: false, error: "Incomplete S3 configuration." };
+  }
+  const b64 = await send<string | null>("VAULT_BYTES_GET");
+  if (!b64) return { ok: false, error: "No vault data to push." };
+  try {
+    await s3Upload(
+      {
+        endpoint: cfg.s3_endpoint || undefined,
+        region: cfg.s3_region || "us-east-1",
+        bucket: cfg.s3_bucket,
+        key: cfg.s3_key,
+        accessKeyId: cfg.aws_access_key_id,
+        secretAccessKey: cfg.aws_secret_access_key,
+      },
+      base64ToBytes(b64),
+    );
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+}
+
+async function saveDraft(): Promise<void> {
+  if (!editDraft || !vault) return;
+  const trimmedKey = editDraft.key.trim();
+  if (!trimmedKey) {
+    flashToast("Name is required", true);
+    return;
+  }
+  const isRename = editDraft.originalKey !== null && editDraft.originalKey !== trimmedKey;
+  const isNew = editDraft.originalKey === null;
+  if ((isNew || isRename) && vault.entries[trimmedKey]) {
+    flashToast(`Item "${trimmedKey}" already exists`, true);
+    return;
+  }
+
+  const entry = draftToEntry(editDraft, editDraft.createdAt);
+  if (isRename && editDraft.originalKey) {
+    deleteEntry(vault, editDraft.originalKey);
+  }
+  addEntry(vault, trimmedKey, entry);
+
+  const persistRes = await persistVault();
+  if (!persistRes.ok) {
+    flashToast(persistRes.error, true);
+    return;
+  }
+
+  selectedKey = trimmedKey;
+  editDraft = null;
+  render();
+  flashToast("Saved");
+
+  // Auto-push to S3 in the background. Failures here surface as toasts but
+  // don't roll back the local save — the user can retry via the Push button.
+  pushToS3().then((res) => {
+    if (!res.ok) flashToast(`S3 push failed: ${res.error}`, true);
+    else flashToast("Synced to S3");
+  });
+}
+
+async function deleteSelected(): Promise<void> {
+  if (!vault || !selectedKey) return;
+  const key = selectedKey;
+  if (!confirm(`Delete "${key}"? This cannot be undone.`)) return;
+  deleteEntry(vault, key);
+  const persistRes = await persistVault();
+  if (!persistRes.ok) {
+    flashToast(persistRes.error, true);
+    return;
+  }
+  selectedKey = null;
+  editDraft = null;
+  render();
+  flashToast("Deleted");
+  pushToS3().then((res) => {
+    if (!res.ok) flashToast(`S3 push failed: ${res.error}`, true);
+    else flashToast("Synced to S3");
+  });
 }
 
 // ---------- S3 pull ----------
@@ -684,6 +1048,15 @@ function iconCopy(cls: string) {
 }
 function iconEye(cls: string) {
   return svgIcon('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>', cls);
+}
+function iconPlus(cls: string) {
+  return svgIcon('<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>', cls);
+}
+function iconPencil(cls: string) {
+  return svgIcon('<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/>', cls);
+}
+function iconTrash(cls: string) {
+  return svgIcon('<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>', cls);
 }
 function iconGear(cls: string) {
   return svgIcon('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>', cls);

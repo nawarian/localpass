@@ -26,11 +26,13 @@ async function getVaultBytesB64(): Promise<string | null> {
   return (result[VAULT_KEY] as string | undefined) ?? null;
 }
 
-async function setVaultBytesB64(b64: string): Promise<void> {
+async function setVaultBytesB64(b64: string, keepSession = false): Promise<void> {
   await browser.storage.local.set({ [VAULT_KEY]: b64 });
-  // New bytes may have been encrypted with a different password, so the
-  // previously cached unlocked vault is no longer valid. Force re-unlock.
-  await browser.storage.session.remove(SESSION_VAULT_KEY);
+  if (!keepSession) {
+    // New bytes may have been encrypted with a different password, so the
+    // previously cached unlocked vault is no longer valid. Force re-unlock.
+    await browser.storage.session.remove(SESSION_VAULT_KEY);
+  }
 }
 
 async function readCachedVault(): Promise<Vault | null> {
@@ -196,8 +198,10 @@ browser.runtime.onMessage.addListener((message: unknown) => {
       return saveConfig(msg.payload as Config).then(() => true);
     case "VAULT_BYTES_GET":
       return getVaultBytesB64();
-    case "VAULT_BYTES_SET":
-      return setVaultBytesB64((msg.payload as { b64: string }).b64).then(() => true);
+    case "VAULT_BYTES_SET": {
+      const p = msg.payload as { b64: string; keepSession?: boolean };
+      return setVaultBytesB64(p.b64, p.keepSession === true).then(() => true);
+    }
     case "AUTOFILL_QUERY":
       return autofillQuery((msg.payload as { url: string }).url);
     case "AUTOFILL_FILL":
