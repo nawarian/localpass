@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LocalPass Settings</title>
+</head>
+<body>
+  <div id="app">
+    <h1>LocalPass Settings</h1>
+
+    <section id="s3-config">
+      <h2>S3 Connection</h2>
+      <form id="s3-form">
+        <label>
+          S3 Endpoint
+          <input type="text" id="s3-endpoint" placeholder="https://s3.example.com" />
+        </label>
+        <label>
+          S3 Region
+          <input type="text" id="s3-region" placeholder="us-east-1" />
+        </label>
+        <label>
+          S3 Bucket
+          <input type="text" id="s3-bucket" placeholder="my-vault-bucket" />
+        </label>
+        <label>
+          S3 Key (path in bucket)
+          <input type="text" id="s3-key" placeholder="localpass/store.json" />
+        </label>
+        <label>
+          AWS Access Key ID
+          <input type="text" id="aws-access-key-id" autocomplete="off" />
+        </label>
+        <label>
+          AWS Secret Access Key
+          <input type="password" id="aws-secret-access-key" autocomplete="off" />
+        </label>
+        <div class="actions">
+          <button type="submit">Save Configuration</button>
+          <button type="button" id="pull-vault">Pull Vault from S3</button>
+        </div>
+      </form>
+      <div id="status-message" class="status"></div>
+    </section>
+
+    <section id="unlock-section" style="display: none;">
+      <h2>Unlock Vault</h2>
+      <p>Vault file pulled. Enter your master password to unlock.</p>
+      <form id="unlock-form">
+        <label>
+          Master Password
+          <input type="password" id="master-password" autocomplete="off" />
+        </label>
+        <button type="submit">Unlock Vault</button>
+      </form>
+      <div id="unlock-status" class="status"></div>
+      <div id="vault-content" style="display: none;">
+        <h3>Vault unlocked!</h3>
+        <pre id="vault-summary"></pre>
+      </div>
+    </section>
+  </div>
+  <script type="module" src="./index.ts"></script>
+</body>
+</html>

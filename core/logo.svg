@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 580">
+  <defs>
+    <radialGradient id="grad" cx="200" cy="100" r="260" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#38BCBA"/>
+      <stop offset="100%" stop-color="#259EA0"/>
+    </radialGradient>
+    <clipPath id="clip">
+      <circle cx="250" cy="210" r="182"/>
+    </clipPath>
+  </defs>
+
+  <!-- Badge circle -->
+  <circle cx="250" cy="210" r="182" fill="url(#grad)"/>
+  <!-- Inner decorative ring -->
+  <circle cx="250" cy="210" r="168" fill="none" stroke="white" stroke-width="5"/>
+
+  <!-- White icon elements clipped to circle -->
+  <g clip-path="url(#clip)" fill="white">
+
+    <!-- KEY: bow (circular head) -->
+    <circle cx="250" cy="115" r="42"/>
+    <!-- KEY: blade -->
+    <rect x="243" y="115" width="14" height="183"/>
+    <!-- KEY: teeth (right side) -->
+    <rect x="257" y="183" width="16" height="13"/>
+    <rect x="257" y="212" width="11" height="13"/>
+    <rect x="257" y="243" width="16" height="13"/>
+
+    <!-- PINS — left side (inner to outer) -->
+    <circle cx="219" cy="140" r="13"/>
+    <rect x="214.5" y="140" width="9" height="158"/>
+
+    <circle cx="183" cy="177" r="13"/>
+    <rect x="178.5" y="177" width="9" height="121"/>
+
+    <circle cx="148" cy="207" r="13"/>
+    <rect x="143.5" y="207" width="9" height="91"/>
+
+    <circle cx="112" cy="234" r="13"/>
+    <rect x="107.5" y="234" width="9" height="64"/>
+
+    <!-- PINS — right side (inner to outer) -->
+    <circle cx="281" cy="140" r="13"/>
+    <rect x="276.5" y="140" width="9" height="158"/>
+
+    <circle cx="317" cy="177" r="13"/>
+    <rect x="312.5" y="177" width="9" height="121"/>
+
+    <circle cx="352" cy="207" r="13"/>
+    <rect x="347.5" y="207" width="9" height="91"/>
+
+    <circle cx="388" cy="234" r="13"/>
+    <rect x="383.5" y="234" width="9" height="64"/>
+
+  </g>
+
+  <!-- Hole in key bow (teal punch-through over white shapes) -->
+  <circle cx="250" cy="108" r="17" fill="url(#grad)"/>
+
+  <!-- LOCALPASS -->
+  <text x="250" y="452"
+        font-family="'Arial Black', 'Helvetica Neue', Arial, sans-serif"
+        font-weight="900"
+        font-size="61"
+        fill="#27A4A3"
+        text-anchor="middle"
+        letter-spacing="1">LOCALPASS</text>
+
+  <!-- OWN IT -->
+  <text x="253" y="493"
+        font-family="Arial, Helvetica, sans-serif"
+        font-weight="400"
+        font-size="21"
+        fill="#27A4A3"
+        text-anchor="middle"
+        letter-spacing="11">OWN IT</text>
+</svg>

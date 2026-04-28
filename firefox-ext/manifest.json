@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "LocalPass",
+  "version": "1.0.0",
+  "description": "Local-first password manager with S3 sync",
+  "permissions": [
+    "storage",
+    "clipboardWrite"
+  ],
+  "host_permissions": [],
+  "action": {
+    "default_popup": "src/popup/index.html",
+    "default_title": "LocalPass"
+  },
+  "options_ui": {
+    "page": "src/options/index.html",
+    "open_in_tab": true
+  },
+  "background": {
+    "service_worker": "src/background/index.ts",
+    "type": "module"
+  },
+  "icons": {
+    "48": "icons/icon-48.png",
+    "96": "icons/icon-96.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "localpass@nawarian.dev",
+      "strict_min_version": "112.0"
+    }
+  }
+}
