@@ -191,6 +191,67 @@ function flashToast(text: string, error = false) {
   setTimeout(() => t.remove(), 1300);
 }
 
+// ---------- sync status banner ----------
+//
+// Saving an entry takes a noticeable amount of time: encrypt the vault,
+// stash the bytes in extension storage, then push to S3. We surface progress
+// as a fixed top banner so the user knows what's happening even when the
+// underlying view re-renders mid-flow (edit pane → detail pane).
+
+type SyncPhase = "working" | "success" | "error";
+
+let syncBanner: HTMLElement | null = null;
+let syncDismissTimer: number | undefined;
+
+function setSyncStatus(phase: SyncPhase | null, message?: string): void {
+  if (syncDismissTimer !== undefined) {
+    clearTimeout(syncDismissTimer);
+    syncDismissTimer = undefined;
+  }
+  if (phase === null) {
+    syncBanner?.remove();
+    syncBanner = null;
+    return;
+  }
+  if (!syncBanner) {
+    syncBanner = el("div", {});
+    document.body.appendChild(syncBanner);
+  }
+  const tone =
+    phase === "success"
+      ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-300"
+      : phase === "error"
+      ? "bg-red-500/15 border-red-500/40 text-red-300"
+      : "bg-surface border-border text-text";
+  syncBanner.className = `fixed top-2 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-md text-xs font-medium shadow-lg z-50 flex items-center gap-2 border max-w-[90%] ${tone}`;
+  syncBanner.replaceChildren();
+  const icon =
+    phase === "success"
+      ? iconCheck("w-3.5 h-3.5 flex-shrink-0")
+      : phase === "error"
+      ? iconAlert("w-3.5 h-3.5 flex-shrink-0")
+      : iconLoader("w-3.5 h-3.5 flex-shrink-0 animate-spin");
+  syncBanner.append(icon, document.createTextNode(message || ""));
+
+  if (phase === "success") {
+    syncDismissTimer = window.setTimeout(() => setSyncStatus(null), 1600);
+  } else if (phase === "error") {
+    // Errors stay visible long enough to read, then disappear so they don't
+    // get stuck if the next op succeeds without re-triggering the banner.
+    syncDismissTimer = window.setTimeout(() => setSyncStatus(null), 4500);
+  }
+}
+
+// Wait until the browser has actually painted. Argon2id key derivation is a
+// synchronous CPU burst that freezes the main thread for ~1–2s; without this,
+// `setSyncStatus(...)` schedules a DOM update that never makes it to screen
+// before the freeze starts. Two rAFs ≈ "after the next paint completes".
+function nextPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
+}
+
 // ---------- bootstrap ----------
 
 async function determineInitialState(): Promise<UIState> {
@@ -930,7 +991,10 @@ async function pushToS3(): Promise<{ ok: true } | { ok: false; error: string }> 
   }
 }
 
+let isSyncing = false;
+
 async function saveDraft(): Promise<void> {
+  if (isSyncing) return;
   if (!editDraft || !vault) return;
   const trimmedKey = editDraft.key.trim();
   if (!trimmedKey) {
@@ -950,43 +1014,65 @@ async function saveDraft(): Promise<void> {
   }
   addEntry(vault, trimmedKey, entry);
 
-  const persistRes = await persistVault();
-  if (!persistRes.ok) {
-    flashToast(persistRes.error, true);
-    return;
+  isSyncing = true;
+  try {
+    setSyncStatus("working", "Encrypting vault…");
+    await nextPaint();
+    const persistRes = await persistVault();
+    if (!persistRes.ok) {
+      setSyncStatus("error", persistRes.error);
+      return;
+    }
+
+    selectedKey = trimmedKey;
+    editDraft = null;
+    render();
+
+    setSyncStatus("working", "Syncing to S3…");
+    await nextPaint();
+    const pushRes = await pushToS3();
+    if (!pushRes.ok) {
+      setSyncStatus("error", `S3 sync failed: ${pushRes.error}`);
+      return;
+    }
+    setSyncStatus("success", "Saved & synced");
+  } finally {
+    isSyncing = false;
   }
-
-  selectedKey = trimmedKey;
-  editDraft = null;
-  render();
-  flashToast("Saved");
-
-  // Auto-push to S3 in the background. Failures here surface as toasts but
-  // don't roll back the local save — the user can retry via the Push button.
-  pushToS3().then((res) => {
-    if (!res.ok) flashToast(`S3 push failed: ${res.error}`, true);
-    else flashToast("Synced to S3");
-  });
 }
 
 async function deleteSelected(): Promise<void> {
+  if (isSyncing) return;
   if (!vault || !selectedKey) return;
   const key = selectedKey;
   if (!confirm(`Delete "${key}"? This cannot be undone.`)) return;
   deleteEntry(vault, key);
-  const persistRes = await persistVault();
-  if (!persistRes.ok) {
-    flashToast(persistRes.error, true);
-    return;
+
+  isSyncing = true;
+  try {
+    setSyncStatus("working", "Encrypting vault…");
+    await nextPaint();
+    const persistRes = await persistVault();
+    if (!persistRes.ok) {
+      setSyncStatus("error", persistRes.error);
+      return;
+    }
+
+    selectedKey = null;
+    editDraft = null;
+    render();
+
+    setSyncStatus("working", "Syncing to S3…");
+    await nextPaint();
+    const pushRes = await pushToS3();
+    if (!pushRes.ok) {
+      setSyncStatus("error", `S3 sync failed: ${pushRes.error}`);
+      return;
+    }
+    setSyncStatus("success", "Deleted & synced");
+  } finally {
+    isSyncing = false;
   }
-  selectedKey = null;
-  editDraft = null;
-  render();
-  flashToast("Deleted");
-  pushToS3().then((res) => {
-    if (!res.ok) flashToast(`S3 push failed: ${res.error}`, true);
-    else flashToast("Synced to S3");
-  });
 }
 
 // ---------- S3 pull ----------
@@ -1057,6 +1143,18 @@ function iconPencil(cls: string) {
 }
 function iconTrash(cls: string) {
   return svgIcon('<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>', cls);
+}
+// lucide loader-2 — paired with Tailwind's `animate-spin`.
+function iconLoader(cls: string) {
+  return svgIcon('<path d="M21 12a9 9 0 1 1-6.219-8.56"/>', cls);
+}
+// lucide check
+function iconCheck(cls: string) {
+  return svgIcon('<polyline points="20 6 9 17 4 12"/>', cls);
+}
+// lucide alert-circle
+function iconAlert(cls: string) {
+  return svgIcon('<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>', cls);
 }
 function iconGear(cls: string) {
   return svgIcon('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>', cls);
