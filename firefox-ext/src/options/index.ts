@@ -83,6 +83,73 @@ const securityForm = $("security-form") as HTMLFormElement;
 const securityStatus = $("security-status");
 const disableBrowserPmToggle = $("disable-browser-pm") as HTMLInputElement;
 const browserPmStatus = $("browser-pm-status");
+const allSitesToggle = $("all-sites-access") as HTMLInputElement;
+const allSitesStatus = $("all-sites-status");
+
+const ALL_URLS_PERMISSION = { origins: ["<all_urls>"] };
+
+async function refreshAllSitesToggle() {
+  if (!browser.permissions) {
+    allSitesToggle.disabled = true;
+    setStatus(allSitesStatus, "permissions API not available.", true);
+    return;
+  }
+  try {
+    const granted = await browser.permissions.contains(ALL_URLS_PERMISSION);
+    allSitesToggle.checked = granted;
+    clearStatus(allSitesStatus);
+  } catch (err) {
+    setStatus(allSitesStatus, `Failed to read permission: ${(err as Error).message}`, true);
+  }
+}
+
+allSitesToggle.addEventListener("change", async () => {
+  clearStatus(allSitesStatus);
+  if (allSitesToggle.checked) {
+    try {
+      const granted = await browser.permissions.request(ALL_URLS_PERMISSION);
+      if (!granted) {
+        allSitesToggle.checked = false;
+        setStatus(allSitesStatus, "Permission denied.", true);
+        return;
+      }
+      // Clear the "we already asked" flag so future unlocks skip prompting
+      // (since it's now granted) but also don't leave a stale "prompted" mark
+      // if the user revokes and re-adds.
+      await browser.storage.local.remove("localpass:sites_prompted");
+      setStatus(allSitesStatus, "Granted access on all sites.");
+    } catch (err) {
+      allSitesToggle.checked = false;
+      setStatus(allSitesStatus, `Failed: ${(err as Error).message}`, true);
+    }
+  } else {
+    try {
+      const removed = await browser.permissions.remove(ALL_URLS_PERMISSION);
+      if (!removed) {
+        // Some Firefox versions can't remove permissions declared in
+        // host_permissions — they're considered "required."
+        allSitesToggle.checked = true;
+        setStatus(
+          allSitesStatus,
+          "Firefox won't let this be revoked from here. Toggle it off in about:addons → LocalPass → Permissions.",
+          true,
+        );
+        return;
+      }
+      setStatus(allSitesStatus, "Revoked all-sites access.");
+    } catch (err) {
+      allSitesToggle.checked = true;
+      setStatus(allSitesStatus, `Failed: ${(err as Error).message}`, true);
+    }
+  }
+});
+
+if (browser.permissions?.onAdded) {
+  browser.permissions.onAdded.addListener(refreshAllSitesToggle);
+}
+if (browser.permissions?.onRemoved) {
+  browser.permissions.onRemoved.addListener(refreshAllSitesToggle);
+}
 
 const passwordSavingPref = browser.privacy?.services?.passwordSavingEnabled;
 
@@ -136,6 +203,7 @@ async function init() {
   const settings = await loadSettings();
   autoLockInput.value = String(settings.autoLockMinutes);
   await refreshBrowserPmToggle();
+  await refreshAllSitesToggle();
 }
 
 init().catch(console.error);

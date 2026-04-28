@@ -103,6 +103,24 @@
       <div class="mt-6 pt-5 border-t border-border">
         <div class="flex items-start gap-3">
           <label class="relative inline-flex items-center cursor-pointer mt-0.5">
+            <input type="checkbox" id="all-sites-access" class="peer sr-only" />
+            <span class="w-9 h-5 bg-surface-3 rounded-full transition-colors peer-checked:bg-accent peer-focus-visible:ring-2 peer-focus-visible:ring-accent/40"></span>
+            <span class="absolute left-0.5 top-0.5 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-4"></span>
+          </label>
+          <div class="flex-1">
+            <div class="text-sm font-medium">Access data on all websites</div>
+            <p class="text-xs text-text-muted mt-1">
+              Required for the in-page autofill dropdown to appear on login forms.
+              Without it, LocalPass needs to be granted access on each site individually from the toolbar icon.
+            </p>
+            <div id="all-sites-status" class="text-xs mt-2"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-6 pt-5 border-t border-border">
+        <div class="flex items-start gap-3">
+          <label class="relative inline-flex items-center cursor-pointer mt-0.5">
             <input type="checkbox" id="disable-browser-pm" class="peer sr-only" />
             <span class="w-9 h-5 bg-surface-3 rounded-full transition-colors peer-checked:bg-accent peer-focus-visible:ring-2 peer-focus-visible:ring-accent/40"></span>
             <span class="absolute left-0.5 top-0.5 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-4"></span>

@@ -61,6 +61,32 @@ async function clearCachedVault(): Promise<void> {
   await browser.storage.session.remove(SESSION_VAULT_KEY);
 }
 
+const SITES_PROMPTED_KEY = "localpass:sites_prompted";
+
+/**
+ * Prompt for `<all_urls>` host permission once after the user has unlocked.
+ * Without this, the in-page autofill dropdown can't appear on sites the user
+ * hasn't manually approved. We respect the user's decision: if they accept
+ * or dismiss, we never ask again — they can flip it later from Settings.
+ */
+async function maybeRequestSitesPermission(): Promise<void> {
+  if (!browser.permissions) return;
+  try {
+    const granted = await browser.permissions.contains({ origins: ["<all_urls>"] });
+    if (granted) return;
+    const stored = await browser.storage.local.get(SITES_PROMPTED_KEY);
+    if (stored[SITES_PROMPTED_KEY]) return;
+    try {
+      await browser.permissions.request({ origins: ["<all_urls>"] });
+    } catch {
+      /* user dismissed, or gesture window lost — fine */
+    }
+    await browser.storage.local.set({ [SITES_PROMPTED_KEY]: true });
+  } catch {
+    /* permissions API unavailable in this Firefox — silently skip */
+  }
+}
+
 // ---------- helpers ----------
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -279,6 +305,7 @@ function renderLocked(): HTMLElement {
       }
       vault = await loadStore(base64ToBytes(b64), pwInput.value);
       await saveCachedVault(vault);
+      await maybeRequestSitesPermission();
       await refresh();
     } catch (err) {
       const msg = (err as Error).message;

@@ -8,7 +8,17 @@
     "clipboardWrite",
     "privacy"
   ],
-  "host_permissions": [],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content/index.ts"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
   "action": {
     "default_popup": "src/popup/index.html",
     "default_title": "LocalPass"
