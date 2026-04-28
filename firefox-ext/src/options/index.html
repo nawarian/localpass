@@ -3,64 +3,143 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>LocalPass Settings</title>
+  <title>LocalPass · Settings</title>
+  <link rel="stylesheet" href="../styles.css" />
 </head>
-<body>
-  <div id="app">
-    <h1>LocalPass Settings</h1>
+<body class="min-h-screen bg-bg text-text">
+  <main class="max-w-2xl mx-auto px-6 py-10">
+    <header class="flex items-center gap-3 mb-8">
+      <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-teal-400 to-teal-600 flex items-center justify-center shadow-lg shadow-teal-500/20">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5 text-white">
+          <circle cx="8" cy="14" r="4"/><path d="M11 11l9-9"/><path d="M16 6l3 3"/>
+        </svg>
+      </div>
+      <div>
+        <h1 class="text-xl font-semibold leading-tight">LocalPass</h1>
+        <p class="text-xs text-text-muted">Settings</p>
+      </div>
+    </header>
 
-    <section id="s3-config">
-      <h2>S3 Connection</h2>
-      <form id="s3-form">
-        <label>
-          S3 Endpoint
-          <input type="text" id="s3-endpoint" placeholder="https://s3.example.com" />
-        </label>
-        <label>
-          S3 Region
-          <input type="text" id="s3-region" placeholder="us-east-1" />
-        </label>
-        <label>
-          S3 Bucket
-          <input type="text" id="s3-bucket" placeholder="my-vault-bucket" />
-        </label>
-        <label>
-          S3 Key (path in bucket)
-          <input type="text" id="s3-key" placeholder="localpass/store.json" />
-        </label>
-        <label>
-          AWS Access Key ID
-          <input type="text" id="aws-access-key-id" autocomplete="off" />
-        </label>
-        <label>
-          AWS Secret Access Key
-          <input type="password" id="aws-secret-access-key" autocomplete="off" />
-        </label>
-        <div class="actions">
-          <button type="submit">Save Configuration</button>
-          <button type="button" id="pull-vault">Pull Vault from S3</button>
+    <section class="rounded-xl bg-surface border border-border p-5 mb-5">
+      <div class="flex items-center justify-between mb-1">
+        <h2 class="text-sm font-semibold">S3 Connection</h2>
+        <span class="text-[10px] uppercase tracking-wider text-text-dim">Encrypted at rest</span>
+      </div>
+      <p class="text-xs text-text-muted mb-5">Where your encrypted vault is stored.</p>
+
+      <form id="s3-form" class="space-y-4">
+        <div class="grid grid-cols-2 gap-3">
+          <label class="block">
+            <span class="text-[11px] uppercase tracking-wider text-text-muted">S3 Endpoint</span>
+            <input id="s3-endpoint" type="text" placeholder="https://s3.example.com"
+              class="mt-1 w-full bg-surface-2 border border-border focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 rounded-lg px-3 py-2 text-sm placeholder:text-text-dim" />
+          </label>
+          <label class="block">
+            <span class="text-[11px] uppercase tracking-wider text-text-muted">Region</span>
+            <input id="s3-region" type="text" placeholder="us-east-1"
+              class="mt-1 w-full bg-surface-2 border border-border focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 rounded-lg px-3 py-2 text-sm placeholder:text-text-dim" />
+          </label>
+          <label class="block">
+            <span class="text-[11px] uppercase tracking-wider text-text-muted">Bucket</span>
+            <input id="s3-bucket" type="text" placeholder="my-vault-bucket"
+              class="mt-1 w-full bg-surface-2 border border-border focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 rounded-lg px-3 py-2 text-sm placeholder:text-text-dim" />
+          </label>
+          <label class="block">
+            <span class="text-[11px] uppercase tracking-wider text-text-muted">Object key</span>
+            <input id="s3-key" type="text" placeholder="localpass/store.json"
+              class="mt-1 w-full bg-surface-2 border border-border focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 rounded-lg px-3 py-2 text-sm placeholder:text-text-dim" />
+          </label>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <label class="block">
+            <span class="text-[11px] uppercase tracking-wider text-text-muted">Access Key ID</span>
+            <input id="aws-access-key-id" type="text" autocomplete="off"
+              class="mt-1 w-full bg-surface-2 border border-border focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 rounded-lg px-3 py-2 text-sm font-mono placeholder:text-text-dim" />
+          </label>
+          <label class="block">
+            <span class="text-[11px] uppercase tracking-wider text-text-muted">Secret Access Key</span>
+            <input id="aws-secret-access-key" type="password" autocomplete="off"
+              class="mt-1 w-full bg-surface-2 border border-border focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 rounded-lg px-3 py-2 text-sm font-mono placeholder:text-text-dim" />
+          </label>
+        </div>
+
+        <div class="flex items-center gap-2 pt-2">
+          <button type="submit"
+            class="bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors">
+            Save configuration
+          </button>
+          <button type="button" id="pull-vault"
+            class="border border-border hover:border-border-strong text-sm font-medium rounded-lg px-4 py-2 transition-colors">
+            Pull vault from S3
+          </button>
+          <div id="status-message" class="text-xs ml-2"></div>
         </div>
       </form>
-      <div id="status-message" class="status"></div>
     </section>
 
-    <section id="unlock-section" style="display: none;">
-      <h2>Unlock Vault</h2>
-      <p>Vault file pulled. Enter your master password to unlock.</p>
-      <form id="unlock-form">
-        <label>
-          Master Password
-          <input type="password" id="master-password" autocomplete="off" />
+    <section class="rounded-xl bg-surface border border-border p-5 mb-5">
+      <div class="flex items-center justify-between mb-1">
+        <h2 class="text-sm font-semibold">Security</h2>
+      </div>
+      <p class="text-xs text-text-muted mb-5">Control how long the popup keeps your vault unlocked.</p>
+
+      <form id="security-form" class="flex items-end gap-3">
+        <label class="block">
+          <span class="text-[11px] uppercase tracking-wider text-text-muted">Auto-lock after</span>
+          <div class="mt-1 flex items-center gap-2">
+            <input id="auto-lock-minutes" type="number" min="1" step="1"
+              class="w-24 bg-surface-2 border border-border focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 rounded-lg px-3 py-2 text-sm placeholder:text-text-dim" />
+            <span class="text-sm text-text-muted">minutes</span>
+          </div>
         </label>
-        <button type="submit">Unlock Vault</button>
+        <button type="submit"
+          class="bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors">
+          Save
+        </button>
+        <div id="security-status" class="text-xs ml-2"></div>
       </form>
-      <div id="unlock-status" class="status"></div>
-      <div id="vault-content" style="display: none;">
-        <h3>Vault unlocked!</h3>
-        <pre id="vault-summary"></pre>
+
+      <div class="mt-6 pt-5 border-t border-border">
+        <div class="flex items-start gap-3">
+          <label class="relative inline-flex items-center cursor-pointer mt-0.5">
+            <input type="checkbox" id="disable-browser-pm" class="peer sr-only" />
+            <span class="w-9 h-5 bg-surface-3 rounded-full transition-colors peer-checked:bg-accent peer-focus-visible:ring-2 peer-focus-visible:ring-accent/40"></span>
+            <span class="absolute left-0.5 top-0.5 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-4"></span>
+          </label>
+          <div class="flex-1">
+            <div class="text-sm font-medium">Disable Firefox's built-in password manager</div>
+            <p class="text-xs text-text-muted mt-1">
+              Suppresses the "Save password?" prompt and the native autocomplete dropdown so LocalPass stays out of the way.
+              This flips a profile-wide Firefox preference; turning it off here restores the default.
+            </p>
+            <div id="browser-pm-status" class="text-xs mt-2"></div>
+          </div>
+        </div>
       </div>
     </section>
-  </div>
+
+    <section id="unlock-section" class="rounded-xl bg-surface border border-border p-5 hidden">
+      <h2 class="text-sm font-semibold mb-1">Unlock vault</h2>
+      <p class="text-xs text-text-muted mb-4">Vault file pulled. Enter your master password to verify.</p>
+      <form id="unlock-form" class="flex items-end gap-2">
+        <label class="block flex-1">
+          <span class="text-[11px] uppercase tracking-wider text-text-muted">Master password</span>
+          <input id="master-password" type="password" autocomplete="off"
+            class="mt-1 w-full bg-surface-2 border border-border focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 rounded-lg px-3 py-2 text-sm placeholder:text-text-dim" />
+        </label>
+        <button type="submit"
+          class="bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors">
+          Unlock
+        </button>
+      </form>
+      <div id="unlock-status" class="text-xs mt-3"></div>
+      <div id="vault-content" class="hidden mt-4">
+        <div class="text-xs text-text-muted mb-1">Vault summary</div>
+        <pre id="vault-summary" class="text-xs bg-surface-2 border border-border rounded-lg p-3 overflow-auto"></pre>
+      </div>
+    </section>
+  </main>
   <script type="module" src="./index.ts"></script>
 </body>
 </html>

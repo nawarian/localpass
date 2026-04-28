@@ -1,20 +1,21 @@
 /**
  * LocalPass Options / Settings Page
- *
- * Provides:
- *   - S3 connection configuration
- *   - Pull vault from S3
- *   - Unlock vault with master password
  */
 
-import type { Config, Vault, Entry } from "@localpass/core";
-import { s3Download, loadStore, listKeys } from "@localpass/core";
+import type { Config } from "@localpass/core";
+import { s3Download } from "@localpass/core/dist/s3.js";
+import { loadStore } from "@localpass/core/dist/store.js";
+import { listKeys } from "@localpass/core/dist/vault.js";
 
-// --- State ---
+interface Settings {
+  autoLockMinutes: number;
+}
+
+const SETTINGS_KEY = "localpass:settings";
+const DEFAULT_AUTO_LOCK_MIN = 5;
+
 let currentConfig: Config | null = null;
-let vaultData: Uint8Array | null = null;
 
-// --- DOM refs ---
 const $ = (id: string) => document.getElementById(id)!;
 
 const s3Endpoint = $("s3-endpoint") as HTMLInputElement;
@@ -33,16 +34,14 @@ const unlockStatus = $("unlock-status");
 const vaultContent = $("vault-content") as HTMLElement;
 const vaultSummary = $("vault-summary") as HTMLPreElement;
 
-// --- Helpers ---
-
 function setStatus(el: HTMLElement, msg: string, isError = false) {
   el.textContent = msg;
-  el.className = `status ${isError ? "error" : "success"}`;
+  el.className = `text-xs ${isError ? "text-red-400" : "text-emerald-400"}`;
 }
 
 function clearStatus(el: HTMLElement) {
   el.textContent = "";
-  el.className = "status";
+  el.className = "text-xs";
 }
 
 function toConfig(): Config {
@@ -66,54 +65,134 @@ function applyConfig(cfg: Config) {
   awsSecretAccessKey.value = cfg.aws_secret_access_key;
 }
 
-// --- Initial load ---
+async function loadSettings(): Promise<Settings> {
+  const result = await browser.storage.local.get(SETTINGS_KEY);
+  const stored = result[SETTINGS_KEY] as Partial<Settings> | undefined;
+  const min = stored?.autoLockMinutes;
+  return {
+    autoLockMinutes: typeof min === "number" && min > 0 ? min : DEFAULT_AUTO_LOCK_MIN,
+  };
+}
+
+async function saveSettings(settings: Settings): Promise<void> {
+  await browser.storage.local.set({ [SETTINGS_KEY]: settings });
+}
+
+const autoLockInput = $("auto-lock-minutes") as HTMLInputElement;
+const securityForm = $("security-form") as HTMLFormElement;
+const securityStatus = $("security-status");
+const disableBrowserPmToggle = $("disable-browser-pm") as HTMLInputElement;
+const browserPmStatus = $("browser-pm-status");
+
+const passwordSavingPref = browser.privacy?.services?.passwordSavingEnabled;
+
+async function refreshBrowserPmToggle() {
+  if (!passwordSavingPref) {
+    disableBrowserPmToggle.disabled = true;
+    setStatus(browserPmStatus, "This Firefox version does not expose the privacy API.", true);
+    return;
+  }
+  try {
+    const result = await passwordSavingPref.get({});
+    disableBrowserPmToggle.checked = result.value === false;
+    if (result.levelOfControl === "controlled_by_other_extensions") {
+      disableBrowserPmToggle.disabled = true;
+      setStatus(browserPmStatus, "Another extension is controlling this setting.", true);
+    } else if (result.levelOfControl === "not_controllable") {
+      disableBrowserPmToggle.disabled = true;
+      setStatus(browserPmStatus, "This setting is not controllable in your environment.", true);
+    } else {
+      disableBrowserPmToggle.disabled = false;
+      clearStatus(browserPmStatus);
+    }
+  } catch (err) {
+    setStatus(browserPmStatus, `Failed to read setting: ${(err as Error).message}`, true);
+  }
+}
+
+disableBrowserPmToggle.addEventListener("change", async () => {
+  if (!passwordSavingPref) return;
+  clearStatus(browserPmStatus);
+  try {
+    if (disableBrowserPmToggle.checked) {
+      await passwordSavingPref.set({ value: false });
+      setStatus(browserPmStatus, "Firefox password manager disabled.");
+    } else {
+      await passwordSavingPref.clear({});
+      setStatus(browserPmStatus, "Firefox password manager restored.");
+    }
+  } catch (err) {
+    setStatus(browserPmStatus, `Failed to update: ${(err as Error).message}`, true);
+    await refreshBrowserPmToggle();
+  }
+});
 
 async function init() {
-  // Load config from storage
   const response = await browser.runtime.sendMessage({ type: "CONFIG_GET" });
   if (response) {
     currentConfig = response as Config;
     applyConfig(currentConfig);
   }
+  const settings = await loadSettings();
+  autoLockInput.value = String(settings.autoLockMinutes);
+  await refreshBrowserPmToggle();
 }
 
 init().catch(console.error);
 
-// --- Save Config ---
+securityForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  clearStatus(securityStatus);
+  const min = Number(autoLockInput.value);
+  if (!Number.isFinite(min) || min < 1) {
+    setStatus(securityStatus, "Enter at least 1 minute.", true);
+    return;
+  }
+  await saveSettings({ autoLockMinutes: Math.floor(min) });
+  setStatus(securityStatus, "Saved.");
+});
 
 s3Form.addEventListener("submit", async (e) => {
   e.preventDefault();
   clearStatus(statusMsg);
-
   const cfg = toConfig();
-
   try {
     await browser.runtime.sendMessage({ type: "CONFIG_SET", payload: cfg });
     currentConfig = cfg;
-    setStatus(statusMsg, "Configuration saved successfully.");
+    setStatus(statusMsg, "Configuration saved.");
   } catch (err) {
-    setStatus(statusMsg, `Failed to save config: ${(err as Error).message}`, true);
+    setStatus(statusMsg, `Failed to save: ${(err as Error).message}`, true);
   }
 });
 
-// --- Pull Vault ---
+function bytesToBase64(data: Uint8Array): string {
+  let bin = "";
+  for (let i = 0; i < data.length; i++) bin += String.fromCharCode(data[i]);
+  return btoa(bin);
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+let pulledBytesB64: string | null = null;
 
 pullBtn.addEventListener("click", async () => {
   clearStatus(statusMsg);
   clearStatus(unlockStatus);
-  vaultContent.style.display = "none";
-  vaultData = null;
+  vaultContent.classList.add("hidden");
 
   const cfg = currentConfig ?? toConfig();
-
   if (!cfg.s3_bucket || !cfg.s3_key || !cfg.aws_access_key_id || !cfg.aws_secret_access_key) {
     setStatus(statusMsg, "Please fill in all S3 fields first.", true);
     return;
   }
 
   pullBtn.disabled = true;
-  pullBtn.textContent = "Pulling...";
-
+  pullBtn.textContent = "Pulling…";
   try {
     const data = await s3Download({
       endpoint: cfg.s3_endpoint || undefined,
@@ -123,24 +202,23 @@ pullBtn.addEventListener("click", async () => {
       accessKeyId: cfg.aws_access_key_id,
       secretAccessKey: cfg.aws_secret_access_key,
     });
-
-    vaultData = data;
-    setStatus(statusMsg, "Vault pulled from S3 successfully.");
-    unlockSection.style.display = "block";
+    const b64 = bytesToBase64(data);
+    pulledBytesB64 = b64;
+    await browser.runtime.sendMessage({ type: "VAULT_BYTES_SET", payload: { b64 } });
+    setStatus(statusMsg, "Vault pulled from S3.");
+    unlockSection.classList.remove("hidden");
   } catch (err) {
-    setStatus(statusMsg, `Failed to pull vault: ${(err as Error).message}`, true);
+    setStatus(statusMsg, `Failed to pull: ${(err as Error).message}`, true);
   } finally {
     pullBtn.disabled = false;
-    pullBtn.textContent = "Pull Vault from S3";
+    pullBtn.textContent = "Pull vault from S3";
   }
 });
-
-// --- Unlock Vault ---
 
 unlockForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   clearStatus(unlockStatus);
-  vaultContent.style.display = "none";
+  vaultContent.classList.add("hidden");
 
   const password = masterPassword.value.trim();
   if (!password) {
@@ -148,25 +226,24 @@ unlockForm.addEventListener("submit", async (e) => {
     return;
   }
 
-  if (!vaultData) {
-    setStatus(unlockStatus, "No vault data. Pull from S3 first.", true);
-    return;
-  }
-
   try {
-    const vault = await loadStore(vaultData, password);
+    const b64 = pulledBytesB64 ??
+      (await browser.runtime.sendMessage({ type: "VAULT_BYTES_GET" }) as string | null);
+    if (!b64) {
+      setStatus(unlockStatus, "No vault data. Pull from S3 first.", true);
+      return;
+    }
+    const vault = await loadStore(base64ToBytes(b64), password);
     const keys = listKeys(vault);
-
     vaultSummary.textContent =
       `Version: ${vault.version}\n` +
       `Entries: ${keys.length}\n\n` +
       (keys.length > 0 ? `Keys:\n  ${keys.join("\n  ")}` : "(empty vault)");
-
-    vaultContent.style.display = "block";
-    setStatus(unlockStatus, "Vault unlocked successfully!");
+    vaultContent.classList.remove("hidden");
+    setStatus(unlockStatus, "Vault unlocked.");
   } catch (err) {
     const msg = (err as Error).message;
-    if (msg.includes("wrong master password") || msg.includes("WRONG_PASSWORD")) {
+    if (/wrong master password|WRONG_PASSWORD/i.test(msg)) {
       setStatus(unlockStatus, "Wrong master password.", true);
     } else {
       setStatus(unlockStatus, `Failed to unlock: ${msg}`, true);

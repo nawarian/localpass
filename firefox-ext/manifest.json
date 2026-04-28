@@ -5,7 +5,8 @@
   "description": "Local-first password manager with S3 sync",
   "permissions": [
     "storage",
-    "clipboardWrite"
+    "clipboardWrite",
+    "privacy"
   ],
   "host_permissions": [],
   "action": {

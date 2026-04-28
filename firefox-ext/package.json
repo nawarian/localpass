@@ -15,10 +15,13 @@
   },
   "devDependencies": {
     "@parcel/config-webextension": "^2.14.0",
+    "@tailwindcss/postcss": "^4.2.4",
     "@types/firefox-webext-browser": "^120.0.0",
     "buffer": "^6.0.3",
     "parcel": "^2.14.0",
+    "postcss": "^8.5.12",
     "process": "^0.11.10",
+    "tailwindcss": "^4.2.4",
     "typescript": "^5.7.0",
     "web-ext": "^8.5.0"
   }

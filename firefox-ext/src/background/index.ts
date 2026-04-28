@@ -1,42 +1,45 @@
 /**
  * LocalPass Background Script
  *
- * Handles storage of config credentials (encrypted in browser storage)
- * and acts as a bridge for S3 operations so that the content script
- * doesn't need direct S3 access.
+ * Stores config and encrypted vault bytes. Decryption happens in the
+ * popup/options page so we don't depend on service-worker memory persistence.
  */
 
 import type { Config } from "@localpass/core";
 
 const CONFIG_KEY = "localpass:config";
+const VAULT_KEY = "localpass:vault";
 
-/**
- * Load the stored config from browser.storage.local.
- */
-export async function loadConfig(): Promise<Config | null> {
+async function loadConfig(): Promise<Config | null> {
   const result = await browser.storage.local.get(CONFIG_KEY);
   return (result[CONFIG_KEY] as Config) ?? null;
 }
 
-/**
- * Save config to browser.storage.local.
- */
-export async function saveConfig(config: Config): Promise<void> {
+async function saveConfig(config: Config): Promise<void> {
   await browser.storage.local.set({ [CONFIG_KEY]: config });
 }
 
-// Listen for messages from options/popup pages
-browser.runtime.onMessage.addListener(
-  (message: unknown, _sender: browser.runtime.MessageSender) => {
-    const msg = message as { type: string; payload?: unknown };
+async function getVaultBytesB64(): Promise<string | null> {
+  const result = await browser.storage.local.get(VAULT_KEY);
+  return (result[VAULT_KEY] as string | undefined) ?? null;
+}
 
-    switch (msg.type) {
-      case "CONFIG_GET":
-        return loadConfig();
-      case "CONFIG_SET":
-        return saveConfig(msg.payload as Config).then(() => true);
-      default:
-        return undefined; // Not handled
-    }
+async function setVaultBytesB64(b64: string): Promise<void> {
+  await browser.storage.local.set({ [VAULT_KEY]: b64 });
+}
+
+browser.runtime.onMessage.addListener((message: unknown) => {
+  const msg = message as { type: string; payload?: unknown };
+  switch (msg.type) {
+    case "CONFIG_GET":
+      return loadConfig();
+    case "CONFIG_SET":
+      return saveConfig(msg.payload as Config).then(() => true);
+    case "VAULT_BYTES_GET":
+      return getVaultBytesB64();
+    case "VAULT_BYTES_SET":
+      return setVaultBytesB64((msg.payload as { b64: string }).b64).then(() => true);
+    default:
+      return undefined;
   }
-);
+});

@@ -13,7 +13,11 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "baseUrl": ".",
+    "paths": {
+      "@localpass/core/dist/*": ["node_modules/@localpass/core/dist/*"]
+    }
   },
   "include": ["src"],
   "exclude": ["node_modules", "dist"]
