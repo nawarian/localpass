@@ -7,7 +7,7 @@ import (
 
 func TestEncryptDecryptSuccess(t *testing.T) {
 	plaintext := []byte("hello")
-	password := "myMasterPassword"
+	password := "myPrimaryPassword"
 
 	ciphertext, err := Encrypt(plaintext, password)
 	if err != nil {
@@ -42,7 +42,7 @@ func TestDecryptWrongPassword(t *testing.T) {
 
 func TestEncryptProducesDifferentOutput(t *testing.T) {
 	plaintext := []byte("hello")
-	password := "myMasterPassword"
+	password := "myPrimaryPassword"
 
 	ciphertext1, err := Encrypt(plaintext, password)
 	if err != nil {
@@ -81,7 +81,7 @@ func TestDecryptTooShortData(t *testing.T) {
 
 func TestDecryptCorruptedCiphertext(t *testing.T) {
 	plaintext := []byte("hello")
-	password := "myMasterPassword"
+	password := "myPrimaryPassword"
 
 	ciphertext, err := Encrypt(plaintext, password)
 	if err != nil {
@@ -101,7 +101,7 @@ func TestDecryptCorruptedCiphertext(t *testing.T) {
 
 func TestEncryptDecryptEmptyPlaintext(t *testing.T) {
 	plaintext := []byte("")
-	password := "myMasterPassword"
+	password := "myPrimaryPassword"
 
 	ciphertext, err := Encrypt(plaintext, password)
 	if err != nil {
@@ -120,7 +120,7 @@ func TestEncryptDecryptEmptyPlaintext(t *testing.T) {
 
 func TestEncryptDecryptLargeData(t *testing.T) {
 	plaintext := bytes.Repeat([]byte("a"), 10000)
-	password := "myMasterPassword"
+	password := "myPrimaryPassword"
 
 	ciphertext, err := Encrypt(plaintext, password)
 	if err != nil {

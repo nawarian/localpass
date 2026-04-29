@@ -151,14 +151,14 @@ func resolveConfigPath(args []string) string {
 	return path
 }
 
-// resolveMasterPassword returns the master password based on the noPrompt flag.
-// If noPrompt is true, reads from LOCALPASS_MASTER_PASSWORD env var.
+// resolvePrimaryPassword returns the primary password based on the noPrompt flag.
+// If noPrompt is true, reads from LOCALPASS_PRIMARY_PASSWORD env var.
 // Otherwise, prompts the user interactively.
-func resolveMasterPassword(noPrompt bool, prompt string) (string, error) {
+func resolvePrimaryPassword(noPrompt bool, prompt string) (string, error) {
 	if noPrompt {
-		pass := os.Getenv("LOCALPASS_MASTER_PASSWORD")
+		pass := os.Getenv("LOCALPASS_PRIMARY_PASSWORD")
 		if pass == "" {
-			return "", fmt.Errorf("LOCALPASS_MASTER_PASSWORD is not set")
+			return "", fmt.Errorf("LOCALPASS_PRIMARY_PASSWORD is not set")
 		}
 		return pass, nil
 	}
@@ -183,8 +183,8 @@ func promptYesNo(format string, a ...interface{}) bool {
 }
 
 // createStoreIfNotExist loads the vault from the store path, creating an empty one if it doesn't exist.
-func loadStoreWithPassword(storePath, masterPassword string) (*store.Vault, error) {
-	return store.LoadStore(storePath, masterPassword)
+func loadStoreWithPassword(storePath, primaryPassword string) (*store.Vault, error) {
+	return store.LoadStore(storePath, primaryPassword)
 }
 
 // readLine reads a full line from stdin, trimming leading/trailing whitespace.
@@ -209,22 +209,22 @@ func runInit(args []string) {
 		}
 	}
 
-	// Always prompt for master password (init ignores --no-prompt)
-	fmt.Print("Enter master password: ")
+	// Always prompt for primary password (init ignores --no-prompt)
+	fmt.Print("Enter primary password: ")
 	passBytes, err := readPassword(int(os.Stdin.Fd()))
 	fmt.Println()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: failed to read password: %v\n", err)
 		osExit(1)
 	}
-	masterPassword := strings.TrimSpace(string(passBytes))
+	primaryPassword := strings.TrimSpace(string(passBytes))
 
-	if masterPassword == "" {
-		fmt.Fprintln(os.Stderr, "error: master password cannot be empty")
+	if primaryPassword == "" {
+		fmt.Fprintln(os.Stderr, "error: primary password cannot be empty")
 		osExit(1)
 	}
 
-	fmt.Print("Confirm master password: ")
+	fmt.Print("Confirm primary password: ")
 	confirmBytes, err := readPassword(int(os.Stdin.Fd()))
 	fmt.Println()
 	if err != nil {
@@ -233,14 +233,14 @@ func runInit(args []string) {
 	}
 	confirmPassword := strings.TrimSpace(string(confirmBytes))
 
-	if masterPassword != confirmPassword {
+	if primaryPassword != confirmPassword {
 		fmt.Fprintln(os.Stderr, "error: passwords do not match")
 		osExit(1)
 	}
 
 	// Create empty vault and save
 	vault := store.NewVault()
-	if err := store.SaveStore(storePath, vault, masterPassword); err != nil {
+	if err := store.SaveStore(storePath, vault, primaryPassword); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		osExit(1)
 	}
@@ -262,15 +262,15 @@ func runSet(args []string) {
 	storePath := resolveStorePath(flagArgs)
 	noPrompt := hasFlag(flagArgs, "--no-prompt", "")
 
-	// Resolve master password
-	masterPassword, err := resolveMasterPassword(noPrompt, "Enter master password: ")
+	// Resolve primary password
+	primaryPassword, err := resolvePrimaryPassword(noPrompt, "Enter primary password: ")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		osExit(1)
 	}
 
 	// Load vault
-	vault, err := loadStoreWithPassword(storePath, masterPassword)
+	vault, err := loadStoreWithPassword(storePath, primaryPassword)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		osExit(1)
@@ -403,13 +403,13 @@ func runSet(args []string) {
 
 	vault.AddEntry(key, entry)
 
-	if err := store.SaveStore(storePath, vault, masterPassword); err != nil {
+	if err := store.SaveStore(storePath, vault, primaryPassword); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		osExit(1)
 	}
 
 	configPath := resolveConfigPath(flagArgs)
-	autoSyncAfterSave(storePath, configPath, masterPassword)
+	autoSyncAfterSave(storePath, configPath, primaryPassword)
 
 	fmt.Printf("Entry '%s' saved.\n", key)
 }
@@ -430,13 +430,13 @@ func runGet(args []string) {
 	display := hasFlag(flagArgs, "--display", "-d")
 	showAll := hasFlag(flagArgs, "--all", "-a")
 
-	masterPassword, err := resolveMasterPassword(noPrompt, "Enter master password: ")
+	primaryPassword, err := resolvePrimaryPassword(noPrompt, "Enter primary password: ")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		osExit(1)
 	}
 
-	vault, err := loadStoreWithPassword(storePath, masterPassword)
+	vault, err := loadStoreWithPassword(storePath, primaryPassword)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		osExit(1)
@@ -523,13 +523,13 @@ func runList(args []string) {
 	noPrompt := hasFlag(args, "--no-prompt", "")
 	searchQuery, _ := parseFlag(args, "--search", "-S")
 
-	masterPassword, err := resolveMasterPassword(noPrompt, "Enter master password: ")
+	primaryPassword, err := resolvePrimaryPassword(noPrompt, "Enter primary password: ")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		osExit(1)
 	}
 
-	vault, err := loadStoreWithPassword(storePath, masterPassword)
+	vault, err := loadStoreWithPassword(storePath, primaryPassword)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		osExit(1)
@@ -573,13 +573,13 @@ func runRm(args []string) {
 	storePath := resolveStorePath(flagArgs)
 	noPrompt := hasFlag(flagArgs, "--no-prompt", "")
 
-	masterPassword, err := resolveMasterPassword(noPrompt, "Enter master password: ")
+	primaryPassword, err := resolvePrimaryPassword(noPrompt, "Enter primary password: ")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		osExit(1)
 	}
 
-	vault, err := loadStoreWithPassword(storePath, masterPassword)
+	vault, err := loadStoreWithPassword(storePath, primaryPassword)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		osExit(1)
@@ -604,13 +604,13 @@ func runRm(args []string) {
 
 	vault.DeleteEntry(key)
 
-	if err := store.SaveStore(storePath, vault, masterPassword); err != nil {
+	if err := store.SaveStore(storePath, vault, primaryPassword); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		osExit(1)
 	}
 
 	configPath := resolveConfigPath(flagArgs)
-	autoSyncAfterSave(storePath, configPath, masterPassword)
+	autoSyncAfterSave(storePath, configPath, primaryPassword)
 
 	fmt.Printf("Entry '%s' deleted.\n", key)
 }
@@ -721,7 +721,7 @@ func maskSecret(s string, keep int) string {
 
 // autoSyncAfterSave pushes the vault to S3 if auto-sync is enabled in config.
 // It silently skips if config doesn't exist or S3 settings are incomplete.
-func autoSyncAfterSave(storePath, configPath, masterPassword string) {
+func autoSyncAfterSave(storePath, configPath, primaryPassword string) {
 	cfg, err := config.LoadConfig(configPath)
 	if err != nil || !cfg.AutoSync {
 		return
@@ -773,13 +773,13 @@ func runPush(args []string) {
 	flagKey, hasKey := parseFlag(args, "--s3-key", "")
 	force := hasFlag(args, "--force", "")
 
-	masterPassword, err := resolveMasterPassword(noPrompt, "Enter master password: ")
+	primaryPassword, err := resolvePrimaryPassword(noPrompt, "Enter primary password: ")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		osExit(1)
 	}
 
-	vault, err := loadStoreWithPassword(storePath, masterPassword)
+	vault, err := loadStoreWithPassword(storePath, primaryPassword)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		osExit(1)
@@ -884,7 +884,7 @@ func runPull(args []string) {
 	flagKey, hasKey := parseFlag(args, "--s3-key", "")
 	force := hasFlag(args, "--force", "")
 
-	masterPassword, err := resolveMasterPassword(noPrompt, "Enter master password: ")
+	primaryPassword, err := resolvePrimaryPassword(noPrompt, "Enter primary password: ")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		osExit(1)
@@ -970,9 +970,9 @@ func runPull(args []string) {
 		osExit(1)
 	}
 
-	// Verify we can decrypt with the given master password
-	if _, err := store.Decrypt(remoteData, masterPassword); err != nil {
-		fmt.Fprintf(os.Stderr, "error: remote vault cannot be decrypted with the given master password: %v\n", err)
+	// Verify we can decrypt with the given primary password
+	if _, err := store.Decrypt(remoteData, primaryPassword); err != nil {
+		fmt.Fprintf(os.Stderr, "error: remote vault cannot be decrypted with the given primary password: %v\n", err)
 		osExit(1)
 	}
 

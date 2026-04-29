@@ -10,7 +10,7 @@ import (
 func TestSaveAndLoadStore(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "store.json")
-	password := "myMasterPassword"
+	password := "myPrimaryPassword"
 
 	vault := NewVault()
 	vault.AddEntry("github", Entry{
@@ -82,7 +82,7 @@ func TestLoadCorruptedStore(t *testing.T) {
 func TestSaveCreatesDirectory(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nested", "sub", "store.json")
-	password := "myMasterPassword"
+	password := "myPrimaryPassword"
 
 	vault := NewVault()
 	vault.AddEntry("key", Entry{Metadata: map[string]string{"password": "value"}})
@@ -99,7 +99,7 @@ func TestSaveCreatesDirectory(t *testing.T) {
 func TestSaveAndLoadLargeVault(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "large.json")
-	password := "myMasterPassword"
+	password := "myPrimaryPassword"
 
 	vault := NewVault()
 	for i := 0; i < 1000; i++ {
@@ -129,7 +129,7 @@ func TestSaveAndLoadLargeVault(t *testing.T) {
 func TestAtomicWritePreservesOldFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "atomic.json")
-	password := "myMasterPassword"
+	password := "myPrimaryPassword"
 
 	vault1 := NewVault()
 	vault1.AddEntry("key1", Entry{Metadata: map[string]string{"password": "value1"}})
@@ -204,7 +204,7 @@ func TestLoadStoreWithWrongPassword(t *testing.T) {
 func TestEmptyVaultRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "empty.json")
-	password := "myMasterPassword"
+	password := "myPrimaryPassword"
 
 	vault := NewVault()
 	if err := SaveStore(path, vault, password); err != nil {

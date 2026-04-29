@@ -24,12 +24,12 @@ const (
 
 var (
 	ErrInvalidCiphertext = errors.New("ciphertext is too short")
-	ErrWrongPassword     = errors.New("wrong master password or corrupted data")
+	ErrWrongPassword     = errors.New("wrong primary password or corrupted data")
 )
 
 // Encrypt encrypts plaintext using AES-256-GCM with a key derived from the
-// master password via Argon2id. Output format: salt (16) || nonce (12) || ciphertext || auth_tag.
-func Encrypt(plaintext []byte, masterPassword string) ([]byte, error) {
+// primary password via Argon2id. Output format: salt (16) || nonce (12) || ciphertext || auth_tag.
+func Encrypt(plaintext []byte, primaryPassword string) ([]byte, error) {
 	// Generate random salt
 	salt := make([]byte, saltLen)
 	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
@@ -37,7 +37,7 @@ func Encrypt(plaintext []byte, masterPassword string) ([]byte, error) {
 	}
 
 	// Derive key using Argon2id
-	key := argon2.IDKey([]byte(masterPassword), salt, argonTime, argonMemory, argonThreads, keyLen)
+	key := argon2.IDKey([]byte(primaryPassword), salt, argonTime, argonMemory, argonThreads, keyLen)
 
 	// Create AES-GCM cipher
 	block, err := aes.NewCipher(key)
@@ -69,7 +69,7 @@ func Encrypt(plaintext []byte, masterPassword string) ([]byte, error) {
 
 // Decrypt decrypts data produced by Encrypt.
 // Input format: salt (16) || nonce (12) || ciphertext || auth_tag.
-func Decrypt(data []byte, masterPassword string) ([]byte, error) {
+func Decrypt(data []byte, primaryPassword string) ([]byte, error) {
 	if len(data) < saltLen+nonceLen {
 		return nil, ErrInvalidCiphertext
 	}
@@ -79,7 +79,7 @@ func Decrypt(data []byte, masterPassword string) ([]byte, error) {
 	ciphertext := data[saltLen+nonceLen:]
 
 	// Derive key using Argon2id
-	key := argon2.IDKey([]byte(masterPassword), salt, argonTime, argonMemory, argonThreads, keyLen)
+	key := argon2.IDKey([]byte(primaryPassword), salt, argonTime, argonMemory, argonThreads, keyLen)
 
 	// Create AES-GCM cipher
 	block, err := aes.NewCipher(key)

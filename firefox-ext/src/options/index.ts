@@ -29,7 +29,7 @@ const statusMsg = $("status-message");
 const pullBtn = $("pull-vault") as HTMLButtonElement;
 const unlockSection = $("unlock-section") as HTMLElement;
 const unlockForm = $("unlock-form") as HTMLFormElement;
-const masterPassword = $("master-password") as HTMLInputElement;
+const primaryPassword = $("primary-password") as HTMLInputElement;
 const unlockStatus = $("unlock-status");
 const vaultContent = $("vault-content") as HTMLElement;
 const vaultSummary = $("vault-summary") as HTMLPreElement;
@@ -288,9 +288,9 @@ unlockForm.addEventListener("submit", async (e) => {
   clearStatus(unlockStatus);
   vaultContent.classList.add("hidden");
 
-  const password = masterPassword.value.trim();
+  const password = primaryPassword.value.trim();
   if (!password) {
-    setStatus(unlockStatus, "Please enter a master password.", true);
+    setStatus(unlockStatus, "Please enter a primary password.", true);
     return;
   }
 
@@ -311,8 +311,8 @@ unlockForm.addEventListener("submit", async (e) => {
     setStatus(unlockStatus, "Vault unlocked.");
   } catch (err) {
     const msg = (err as Error).message;
-    if (/wrong master password|WRONG_PASSWORD/i.test(msg)) {
-      setStatus(unlockStatus, "Wrong master password.", true);
+    if (/wrong primary password|WRONG_PASSWORD/i.test(msg)) {
+      setStatus(unlockStatus, "Wrong primary password.", true);
     } else {
       setStatus(unlockStatus, `Failed to unlock: ${msg}`, true);
     }

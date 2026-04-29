@@ -9,7 +9,7 @@ import (
 
 // LoadStore loads and decrypts a vault from the given file path.
 // If the file does not exist, it returns an empty Vault (no error).
-func LoadStore(path string, masterPassword string) (*Vault, error) {
+func LoadStore(path string, primaryPassword string) (*Vault, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -18,7 +18,7 @@ func LoadStore(path string, masterPassword string) (*Vault, error) {
 		return nil, fmt.Errorf("failed to read store file: %w", err)
 	}
 
-	plaintext, err := Decrypt(data, masterPassword)
+	plaintext, err := Decrypt(data, primaryPassword)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decrypt store: %w", err)
 	}
@@ -36,7 +36,7 @@ func LoadStore(path string, masterPassword string) (*Vault, error) {
 }
 
 // SaveStore serializes, encrypts, and atomically writes the vault to the given file path.
-func SaveStore(path string, vault *Vault, masterPassword string) error {
+func SaveStore(path string, vault *Vault, primaryPassword string) error {
 	// Marshal to JSON
 	data, err := json.Marshal(vault)
 	if err != nil {
@@ -44,7 +44,7 @@ func SaveStore(path string, vault *Vault, masterPassword string) error {
 	}
 
 	// Encrypt
-	ciphertext, err := Encrypt(data, masterPassword)
+	ciphertext, err := Encrypt(data, primaryPassword)
 	if err != nil {
 		return fmt.Errorf("failed to encrypt vault: %w", err)
 	}

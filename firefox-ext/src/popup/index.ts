@@ -24,7 +24,7 @@ const app = document.getElementById("app")!;
 
 let uiState: UIState = "locked";
 let vault: Vault | null = null;
-let masterPassword: string | null = null;
+let primaryPassword: string | null = null;
 let selectedKey: string | null = null;
 let searchQuery = "";
 
@@ -55,11 +55,11 @@ async function getSettings(): Promise<Settings> {
 
 interface CachedVault {
   vault: Vault;
-  masterPassword: string;
+  primaryPassword: string;
   expiresAt: number;
 }
 
-async function loadCachedVault(): Promise<{ vault: Vault; masterPassword: string } | null> {
+async function loadCachedVault(): Promise<{ vault: Vault; primaryPassword: string } | null> {
   const result = await browser.storage.session.get(SESSION_VAULT_KEY);
   const cached = result[SESSION_VAULT_KEY] as CachedVault | undefined;
   if (!cached) return null;
@@ -67,18 +67,18 @@ async function loadCachedVault(): Promise<{ vault: Vault; masterPassword: string
     await browser.storage.session.remove(SESSION_VAULT_KEY);
     return null;
   }
-  // Older cache shape (pre-edit support) had no masterPassword. Treat as locked.
-  if (typeof cached.masterPassword !== "string" || !cached.masterPassword) {
+  // Older cache shape had no primaryPassword (or used the legacy field name). Treat as locked.
+  if (typeof cached.primaryPassword !== "string" || !cached.primaryPassword) {
     await browser.storage.session.remove(SESSION_VAULT_KEY);
     return null;
   }
-  return { vault: cached.vault, masterPassword: cached.masterPassword };
+  return { vault: cached.vault, primaryPassword: cached.primaryPassword };
 }
 
 async function saveCachedVault(v: Vault, password: string): Promise<void> {
   const settings = await getSettings();
   const expiresAt = Date.now() + settings.autoLockMinutes * 60_000;
-  const payload: CachedVault = { vault: v, masterPassword: password, expiresAt };
+  const payload: CachedVault = { vault: v, primaryPassword: password, expiresAt };
   await browser.storage.session.set({ [SESSION_VAULT_KEY]: payload });
 }
 
@@ -267,7 +267,7 @@ async function refresh() {
     const cached = await loadCachedVault();
     if (cached) {
       vault = cached.vault;
-      masterPassword = cached.masterPassword;
+      primaryPassword = cached.primaryPassword;
     }
   }
   if (vault) {
@@ -277,7 +277,7 @@ async function refresh() {
     uiState = await determineInitialState();
     selectedKey = null;
     editDraft = null;
-    masterPassword = null;
+    primaryPassword = null;
   }
   render();
 }
@@ -362,14 +362,14 @@ function renderLocked(): HTMLElement {
       iconLock("w-7 h-7 text-text-muted")
     ),
     el("h1", { class: "text-base font-semibold mb-1" }, "Vault locked"),
-    el("p", { class: "text-sm text-text-muted mb-5" }, "Enter your master password to unlock.")
+    el("p", { class: "text-sm text-text-muted mb-5" }, "Enter your primary password to unlock.")
   );
 
   const form = el("form", { class: "w-full max-w-xs flex flex-col gap-3" });
   const pwInput = el("input", {
     type: "password",
     autocomplete: "off",
-    placeholder: "Master password",
+    placeholder: "Primary password",
     class:
       "w-full bg-surface-2 border border-border focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 rounded-lg px-3 py-2.5 text-sm placeholder:text-text-dim",
   }) as HTMLInputElement;
@@ -381,8 +381,8 @@ function renderLocked(): HTMLElement {
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     errorMsg.textContent = "";
-    if (!pwInput.value) {
-      errorMsg.textContent = "Enter your master password.";
+    if (!pwInput.value.trim()) {
+      errorMsg.textContent = "Enter your primary password.";
       return;
     }
     unlockBtn.disabled = true;
@@ -395,15 +395,16 @@ function renderLocked(): HTMLElement {
         unlockBtn.textContent = "Unlock";
         return;
       }
-      vault = await loadStore(base64ToBytes(b64), pwInput.value);
-      masterPassword = pwInput.value;
-      await saveCachedVault(vault, masterPassword);
+      const password = pwInput.value.trim();
+      vault = await loadStore(base64ToBytes(b64), password);
+      primaryPassword = password;
+      await saveCachedVault(vault, primaryPassword);
       await maybeRequestSitesPermission();
       await refresh();
     } catch (err) {
       const msg = (err as Error).message;
-      if (/wrong master password|WRONG_PASSWORD/i.test(msg)) {
-        errorMsg.textContent = "Wrong master password.";
+      if (/wrong primary password|WRONG_PASSWORD/i.test(msg)) {
+        errorMsg.textContent = "Wrong primary password.";
       } else {
         errorMsg.textContent = msg;
       }
@@ -413,7 +414,25 @@ function renderLocked(): HTMLElement {
     }
   });
 
-  body.append(form);
+  const refreshLink = el("button", {
+    type: "button",
+    class: "mt-3 text-xs text-text-muted hover:text-text underline",
+  }, "Refresh from S3") as HTMLButtonElement;
+  refreshLink.addEventListener("click", async () => {
+    errorMsg.textContent = "";
+    refreshLink.disabled = true;
+    refreshLink.textContent = "Refreshing…";
+    const res = await pullFromS3();
+    refreshLink.disabled = false;
+    refreshLink.textContent = "Refresh from S3";
+    if (!res.ok) {
+      errorMsg.textContent = res.error || "Refresh failed.";
+    } else {
+      flashToast("Refreshed from S3");
+    }
+  });
+
+  body.append(form, refreshLink);
   setTimeout(() => pwInput.focus(), 50);
   root.append(body);
   return root;
@@ -845,7 +864,7 @@ function renderTopBar(): HTMLElement {
   }, iconLock("w-4 h-4"));
   lock.addEventListener("click", async () => {
     vault = null;
-    masterPassword = null;
+    primaryPassword = null;
     selectedKey = null;
     searchQuery = "";
     editDraft = null;
@@ -952,13 +971,13 @@ function draftToEntry(draft: EditDraft, prevCreatedAt: string | null): Entry {
 }
 
 async function persistVault(): Promise<{ ok: true } | { ok: false; error: string }> {
-  if (!vault || !masterPassword) {
+  if (!vault || !primaryPassword) {
     return { ok: false, error: "Vault is locked." };
   }
   try {
-    const bytes = await saveStore(vault, masterPassword);
+    const bytes = await saveStore(vault, primaryPassword);
     await send("VAULT_BYTES_SET", { b64: bytesToBase64(bytes), keepSession: true });
-    await saveCachedVault(vault, masterPassword);
+    await saveCachedVault(vault, primaryPassword);
     return { ok: true };
   } catch (err) {
     return { ok: false, error: (err as Error).message };
@@ -1003,19 +1022,29 @@ async function saveDraft(): Promise<void> {
   }
   const isRename = editDraft.originalKey !== null && editDraft.originalKey !== trimmedKey;
   const isNew = editDraft.originalKey === null;
-  if ((isNew || isRename) && vault.entries[trimmedKey]) {
-    flashToast(`Item "${trimmedKey}" already exists`, true);
-    return;
-  }
-
-  const entry = draftToEntry(editDraft, editDraft.createdAt);
-  if (isRename && editDraft.originalKey) {
-    deleteEntry(vault, editDraft.originalKey);
-  }
-  addEntry(vault, trimmedKey, entry);
 
   isSyncing = true;
   try {
+    setSyncStatus("working", "Refreshing from S3…");
+    await nextPaint();
+    const refreshed = await pullAndDecrypt();
+    if (!refreshed.ok) {
+      setSyncStatus("error", `Refresh failed: ${refreshed.error}`);
+      return;
+    }
+    vault = refreshed.vault;
+
+    if ((isNew || isRename) && vault.entries[trimmedKey]) {
+      setSyncStatus("error", `Item "${trimmedKey}" already exists`);
+      return;
+    }
+
+    const entry = draftToEntry(editDraft, editDraft.createdAt);
+    if (isRename && editDraft.originalKey) {
+      deleteEntry(vault, editDraft.originalKey);
+    }
+    addEntry(vault, trimmedKey, entry);
+
     setSyncStatus("working", "Encrypting vault…");
     await nextPaint();
     const persistRes = await persistVault();
@@ -1046,10 +1075,27 @@ async function deleteSelected(): Promise<void> {
   if (!vault || !selectedKey) return;
   const key = selectedKey;
   if (!confirm(`Delete "${key}"? This cannot be undone.`)) return;
-  deleteEntry(vault, key);
 
   isSyncing = true;
   try {
+    setSyncStatus("working", "Refreshing from S3…");
+    await nextPaint();
+    const refreshed = await pullAndDecrypt();
+    if (!refreshed.ok) {
+      setSyncStatus("error", `Refresh failed: ${refreshed.error}`);
+      return;
+    }
+    vault = refreshed.vault;
+
+    if (!vault.entries[key]) {
+      selectedKey = null;
+      editDraft = null;
+      render();
+      setSyncStatus("success", `"${key}" was already removed elsewhere`);
+      return;
+    }
+    deleteEntry(vault, key);
+
     setSyncStatus("working", "Encrypting vault…");
     await nextPaint();
     const persistRes = await persistVault();
@@ -1076,6 +1122,27 @@ async function deleteSelected(): Promise<void> {
 }
 
 // ---------- S3 pull ----------
+
+async function pullAndDecrypt(): Promise<
+  { ok: true; vault: Vault } | { ok: false; error: string }
+> {
+  if (!primaryPassword) return { ok: false, error: "Vault is locked." };
+  const pullRes = await pullFromS3();
+  if (!pullRes.ok) return { ok: false, error: pullRes.error };
+  const b64 = await send<string | null>("VAULT_BYTES_GET");
+  if (!b64) return { ok: false, error: "No vault data after refresh." };
+  try {
+    const fresh = await loadStore(base64ToBytes(b64), primaryPassword);
+    await saveCachedVault(fresh, primaryPassword);
+    return { ok: true, vault: fresh };
+  } catch (err) {
+    const msg = (err as Error).message;
+    if (/wrong primary password|WRONG_PASSWORD/i.test(msg)) {
+      return { ok: false, error: "Cached password no longer matches the vault on S3. Lock and unlock again." };
+    }
+    return { ok: false, error: msg };
+  }
+}
 
 async function pullFromS3(): Promise<{ ok: true } | { ok: false; error: string }> {
   const cfg = await send<Config | null>("CONFIG_GET");

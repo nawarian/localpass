@@ -14,13 +14,13 @@ import { newVault } from "./vault.js";
  */
 export async function loadStore(
   data: Uint8Array | undefined,
-  masterPassword: string
+  primaryPassword: string
 ): Promise<Vault> {
   if (!data || data.length === 0) {
     return newVault();
   }
 
-  const plaintext = await decrypt(data, masterPassword);
+  const plaintext = await decrypt(data, primaryPassword);
   const text = new TextDecoder().decode(plaintext);
   const vault: Vault = JSON.parse(text);
 
@@ -36,9 +36,9 @@ export async function loadStore(
  */
 export async function saveStore(
   vault: Vault,
-  masterPassword: string
+  primaryPassword: string
 ): Promise<Uint8Array> {
   const json = JSON.stringify(vault);
   const plaintext = new TextEncoder().encode(json);
-  return await encrypt(plaintext, masterPassword);
+  return await encrypt(plaintext, primaryPassword);
 }

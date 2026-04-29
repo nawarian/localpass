@@ -86,7 +86,7 @@ func TestSetNoPrompt(t *testing.T) {
 	dir := t.TempDir()
 	storePath := filepath.Join(dir, "store.json")
 
-	t.Setenv("LOCALPASS_MASTER_PASSWORD", "envpass")
+	t.Setenv("LOCALPASS_PRIMARY_PASSWORD", "envpass")
 
 	// Init with readPassword
 	readPassword = func(fd int) ([]byte, error) { return []byte("envpass"), nil }
@@ -162,7 +162,7 @@ func TestSetNoPromptWithoutEnvVar(t *testing.T) {
 	if exitCode != 1 {
 		t.Errorf("expected exit code 1, got %d", exitCode)
 	}
-	if !strings.Contains(stderrBuf(), "LOCALPASS_MASTER_PASSWORD is not set") {
+	if !strings.Contains(stderrBuf(), "LOCALPASS_PRIMARY_PASSWORD is not set") {
 		t.Errorf("expected env var error, got: %s", stderrBuf())
 	}
 }
@@ -365,7 +365,7 @@ func TestListSearch(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(output), "\n")
 	var keys []string
 	for _, line := range lines {
-		if !strings.Contains(line, "Enter master password") {
+		if !strings.Contains(line, "Enter primary password") {
 			keys = append(keys, strings.TrimSpace(line))
 		}
 	}

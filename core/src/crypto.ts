@@ -30,7 +30,7 @@ export class DecryptError extends Error {
 }
 
 /**
- * Derive a 32-byte key from a master password and salt using Argon2id.
+ * Derive a 32-byte key from a primary password and salt using Argon2id.
  */
 export function deriveKey(password: string, salt: Uint8Array): Uint8Array {
   return argon2id(password, salt, {
@@ -42,20 +42,20 @@ export function deriveKey(password: string, salt: Uint8Array): Uint8Array {
 }
 
 /**
- * Encrypt plaintext with a master password.
+ * Encrypt plaintext with a primary password.
  *
  * Returns: salt (16) || nonce (12) || ciphertext || auth_tag
  */
 export async function encrypt(
   plaintext: Uint8Array,
-  masterPassword: string
+  primaryPassword: string
 ): Promise<Uint8Array> {
   // Generate random salt and nonce
   const salt = crypto.getRandomValues(new Uint8Array(SALT_LEN));
   const nonce = crypto.getRandomValues(new Uint8Array(NONCE_LEN));
 
   // Derive key
-  const key = deriveKey(masterPassword, salt);
+  const key = deriveKey(primaryPassword, salt);
 
   // Import key for AES-GCM (cast via Uint8Array to satisfy lib type variances)
   const cryptoKey = await crypto.subtle.importKey(
@@ -90,7 +90,7 @@ export async function encrypt(
  */
 export async function decrypt(
   data: Uint8Array,
-  masterPassword: string
+  primaryPassword: string
 ): Promise<Uint8Array> {
   if (data.length < SALT_LEN + NONCE_LEN) {
     throw new DecryptError(
@@ -104,7 +104,7 @@ export async function decrypt(
   const ciphertext = data.subarray(SALT_LEN + NONCE_LEN);
 
   // Derive key
-  const key = deriveKey(masterPassword, salt);
+  const key = deriveKey(primaryPassword, salt);
 
   // Import key for AES-GCM
   let cryptoKey: CryptoKey;
@@ -133,7 +133,7 @@ export async function decrypt(
     return new Uint8Array(decrypted);
   } catch {
     throw new DecryptError(
-      "wrong master password or corrupted data",
+      "wrong primary password or corrupted data",
       "WRONG_PASSWORD"
     );
   }
