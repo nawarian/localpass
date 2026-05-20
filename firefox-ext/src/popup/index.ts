@@ -283,7 +283,7 @@ async function refresh() {
 }
 
 function render() {
-  app.innerHTML = "";
+  app.textContent = "";
   switch (uiState) {
     case "no_config":
       app.appendChild(renderNoConfig());
@@ -1231,5 +1231,9 @@ function iconGear(cls: string) {
 
 refresh().catch((e) => {
   console.error(e);
-  app.innerHTML = `<div class="p-6 text-sm text-red-400">Error: ${(e as Error).message}</div>`;
+  app.textContent = "";
+  const err = document.createElement("div");
+  err.className = "p-6 text-sm text-red-400";
+  err.textContent = `Error: ${(e as Error).message}`;
+  app.appendChild(err);
 });

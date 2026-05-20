@@ -6,9 +6,10 @@
   "source": "manifest.json",
   "scripts": {
     "dev": "parcel watch manifest.json",
-    "build": "parcel build manifest.json",
-    "package": "npm run build && cd dist && npx web-ext build",
-    "lint": "npx web-ext lint"
+    "build": "parcel build manifest.json && npm run postbuild:firefox",
+    "postbuild:firefox": "jq 'del(.background.service_worker)' dist/manifest.json > dist/manifest.json.tmp && mv dist/manifest.json.tmp dist/manifest.json",
+    "package": "npm run build && npx web-ext build --source-dir=dist --overwrite-dest",
+    "lint": "npm run build && npx web-ext lint --source-dir=dist"
   },
   "dependencies": {
     "@localpass/core": "^1.0.0"
