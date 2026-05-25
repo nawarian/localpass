@@ -18,6 +18,7 @@ export interface Settings {
 
 const SETTINGS_KEY = "localpass:settings";
 const SESSION_VAULT_KEY = "localpass:cached_vault";
+const POPUP_UI_KEY = "localpass:popup_ui";
 const DEFAULT_AUTO_LOCK_MIN = 5;
 const SITES_PROMPTED_KEY = "localpass:sites_prompted";
 
@@ -43,12 +44,16 @@ export async function loadCachedVault(): Promise<{ vault: Vault; primaryPassword
   const cached = result[SESSION_VAULT_KEY] as CachedVault | undefined;
   if (!cached) return null;
   if (Date.now() >= cached.expiresAt) {
+    // Auto-lock expired: drop the cached vault and any transient UI snapshot
+    // (which may hold a half-typed draft/password) together.
     await browser.storage.session.remove(SESSION_VAULT_KEY);
+    await clearPopupUI();
     return null;
   }
   // Older cache shape had no primaryPassword (or used the legacy field name). Treat as locked.
   if (typeof cached.primaryPassword !== "string" || !cached.primaryPassword) {
     await browser.storage.session.remove(SESSION_VAULT_KEY);
+    await clearPopupUI();
     return null;
   }
   return { vault: cached.vault, primaryPassword: cached.primaryPassword };
@@ -63,6 +68,40 @@ export async function saveCachedVault(v: Vault, password: string): Promise<void>
 
 export async function clearCachedVault(): Promise<void> {
   await browser.storage.session.remove(SESSION_VAULT_KEY);
+  // Locking / clearing the vault must also drop any transient UI snapshot so a
+  // leftover draft or typed password can't resurface on reopen.
+  await clearPopupUI();
+}
+
+// ---------- transient popup UI snapshot ----------
+//
+// Firefox tears the popup down whenever it loses focus (alt+tab, clicking
+// another window), discarding all component state. We snapshot the transient,
+// data-only UI state into in-memory session storage (same place the decrypted
+// vault + primary password already live) so reopening restores it as if the
+// popup was never dismissed. Never persisted to disk (storage.local).
+
+export interface PopupUISnapshot {
+  searchQuery: string;
+  selectedKey: string | null;
+  editDraft: EditDraft | null;
+  nextCustomId: number;
+  // Primary (unlock) password being typed on the locked screen, pre-auth.
+  lockedPassword: string;
+}
+
+export async function loadPopupUI(): Promise<PopupUISnapshot | null> {
+  const result = await browser.storage.session.get(POPUP_UI_KEY);
+  const snap = result[POPUP_UI_KEY] as PopupUISnapshot | undefined;
+  return snap ?? null;
+}
+
+export async function savePopupUI(snapshot: PopupUISnapshot): Promise<void> {
+  await browser.storage.session.set({ [POPUP_UI_KEY]: snapshot });
+}
+
+export async function clearPopupUI(): Promise<void> {
+  await browser.storage.session.remove(POPUP_UI_KEY);
 }
 
 /**
@@ -188,6 +227,12 @@ export interface EditDraft {
 let nextCustomId = 1;
 export function allocCustomId(): number {
   return nextCustomId++;
+}
+
+// Restoring a draft from a snapshot must also restore/advance the module-level
+// counter so freshly added custom fields don't collide with the restored ones.
+export function ensureNextCustomId(min: number): void {
+  if (Number.isFinite(min) && min > nextCustomId) nextCustomId = min;
 }
 
 export function entryToDraft(key: string, entry: Entry): EditDraft {

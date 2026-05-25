@@ -14,13 +14,16 @@ import {
   allocCustomId,
   base64ToBytes,
   clearCachedVault,
+  clearPopupUI,
   colorFor,
   determineInitialState,
   draftToEntry,
   ensureHttp,
+  ensureNextCustomId,
   entryToDraft,
   initials,
   loadCachedVault,
+  loadPopupUI,
   maybeRequestSitesPermission,
   newDraft,
   nextPaint,
@@ -28,6 +31,7 @@ import {
   pullAndDecrypt,
   pullFromS3,
   pushToS3,
+  savePopupUI,
   saveCachedVault,
   send,
   touchVault,
@@ -206,15 +210,24 @@ function NoVault({ onPulled }: { onPulled: () => void }) {
 }
 
 function Locked({
+  initialPassword,
+  onPasswordChange,
   onUnlock,
 }: {
+  initialPassword: string;
+  onPasswordChange: (pw: string) => void;
   onUnlock: (vault: Vault, password: string) => void;
 }) {
-  const [password, setPassword] = useState("");
+  const [password, setPassword] = useState(initialPassword);
   const [error, setError] = useState("");
   const [unlocking, setUnlocking] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const updatePassword = (pw: string) => {
+    setPassword(pw);
+    onPasswordChange(pw);
+  };
 
   useEffect(() => {
     const id = setTimeout(() => inputRef.current?.focus(), 50);
@@ -282,7 +295,7 @@ function Locked({
             autocomplete="off"
             placeholder="Primary password"
             value={password}
-            onInput={(e) => setPassword((e.target as HTMLInputElement).value)}
+            onInput={(e) => updatePassword((e.target as HTMLInputElement).value)}
             class="w-full bg-surface-2 border border-border focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 rounded-lg px-3 py-2.5 text-sm placeholder:text-text-dim"
           />
           <div class="text-xs text-red-400 min-h-[1rem]">{error}</div>
@@ -762,11 +775,19 @@ function App() {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
+  const [lockedPassword, setLockedPassword] = useState("");
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
 
+  // Gate first render until bootstrap has rehydrated the snapshot, so the
+  // Locked/Unlocked components mount with restored state (their local useState
+  // reads the prop only once, on mount) rather than the initial empty values.
+  const [hydrated, setHydrated] = useState(false);
+
   const syncTimerRef = useRef<number | undefined>(undefined);
   const isSyncingRef = useRef(false);
+  // Debounce handle for snapshot writes (so each keystroke doesn't spam writes).
+  const uiWriteTimerRef = useRef<number | undefined>(undefined);
 
   const showSync = useCallback((phase: SyncPhase | null, message?: string) => {
     if (syncTimerRef.current !== undefined) {
@@ -788,7 +809,11 @@ function App() {
   }, []);
 
   // Bootstrap: adopt a cached unlocked session if present, else figure out
-  // which empty/locked state to show.
+  // which empty/locked state to show. Then rehydrate the transient UI snapshot
+  // saved before the popup was last dismissed (search/selection/draft when
+  // unlocked, the typed unlock password when locked). loadCachedVault() already
+  // drops the snapshot when the session is expired/cleared, so a stale or
+  // unsafe snapshot will simply not be there to restore.
   useEffect(() => {
     (async () => {
       const cached = await loadCachedVault();
@@ -798,11 +823,50 @@ function App() {
         setUiState("unlocked");
         // Opening the popup is itself an interaction — extend the idle timer.
         touchVault();
+        const snap = await loadPopupUI();
+        if (snap) {
+          setSearchQuery(snap.searchQuery);
+          setSelectedKey(snap.selectedKey);
+          if (snap.editDraft) {
+            ensureNextCustomId(snap.nextCustomId);
+            setEditDraft(snap.editDraft);
+          }
+        }
+        setHydrated(true);
         return;
       }
-      setUiState(await determineInitialState());
+      const state = await determineInitialState();
+      setUiState(state);
+      if (state === "locked") {
+        const snap = await loadPopupUI();
+        if (snap?.lockedPassword) setLockedPassword(snap.lockedPassword);
+      }
+      setHydrated(true);
     })().catch((e) => setBootError((e as Error).message));
   }, []);
+
+  // Persist the transient UI state to session storage on change, debounced so
+  // each keystroke doesn't spam writes. Background's storage.onChanged listener
+  // filters on the vault key, so this never triggers an autofill push.
+  useEffect(() => {
+    if (!hydrated) return;
+    if (uiState !== "unlocked" && uiState !== "locked") return;
+    if (uiWriteTimerRef.current !== undefined) clearTimeout(uiWriteTimerRef.current);
+    uiWriteTimerRef.current = window.setTimeout(() => {
+      void savePopupUI({
+        searchQuery,
+        selectedKey,
+        editDraft,
+        nextCustomId: editDraft
+          ? editDraft.custom.reduce((m, c) => Math.max(m, c.id + 1), 1)
+          : 1,
+        lockedPassword: uiState === "locked" ? lockedPassword : "",
+      });
+    }, 250);
+    return () => {
+      if (uiWriteTimerRef.current !== undefined) clearTimeout(uiWriteTimerRef.current);
+    };
+  }, [hydrated, uiState, searchQuery, selectedKey, editDraft, lockedPassword]);
 
   const onUnlock = useCallback((v: Vault, password: string) => {
     setVault(v);
@@ -810,6 +874,11 @@ function App() {
     setSelectedKey(null);
     setEditDraft(null);
     setSearchQuery("");
+    // Unlock succeeded — drop the typed primary password from both state and
+    // any snapshot written while locked. The unlocked-state effect re-saves a
+    // fresh (passwordless) snapshot.
+    setLockedPassword("");
+    void clearPopupUI();
     setUiState("unlocked");
   }, []);
 
@@ -819,6 +888,8 @@ function App() {
     setSelectedKey(null);
     setSearchQuery("");
     setEditDraft(null);
+    setLockedPassword("");
+    // clearCachedVault() also clears the UI snapshot (draft + any password).
     await clearCachedVault();
     setUiState(await determineInitialState());
   }, []);
@@ -961,12 +1032,22 @@ function App() {
   let content;
   if (bootError) {
     content = <div class="p-6 text-sm text-red-400">Error: {bootError}</div>;
+  } else if (!hydrated) {
+    // Hold the first paint until the snapshot is rehydrated so Locked/Unlocked
+    // mount with restored state rather than initial empty values.
+    content = <div class="flex-1" />;
   } else if (uiState === "no_config") {
     content = <NoConfig />;
   } else if (uiState === "no_vault") {
     content = <NoVault onPulled={reevaluate} />;
   } else if (uiState === "locked") {
-    content = <Locked onUnlock={onUnlock} />;
+    content = (
+      <Locked
+        initialPassword={lockedPassword}
+        onPasswordChange={setLockedPassword}
+        onUnlock={onUnlock}
+      />
+    );
   } else if (vault) {
     content = (
       <Unlocked
