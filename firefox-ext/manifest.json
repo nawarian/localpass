@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "LocalPass",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Local-first password manager with S3 sync",
   "permissions": [
     "storage",
@@ -13,8 +13,12 @@
   ],
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["src/content/index.tsx"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "src/content/index.tsx"
+      ],
       "run_at": "document_start",
       "all_frames": false
     }
@@ -29,7 +33,9 @@
   },
   "background": {
     "service_worker": "src/background/index.ts",
-    "scripts": ["src/background/index.ts"],
+    "scripts": [
+      "src/background/index.ts"
+    ],
     "type": "module"
   },
   "icons": {
@@ -41,7 +47,9 @@
       "id": "localpass@nawarian.dev",
       "strict_min_version": "115.0",
       "data_collection_permissions": {
-        "required": ["none"]
+        "required": [
+          "none"
+        ]
       }
     }
   }
