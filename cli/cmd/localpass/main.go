@@ -54,6 +54,7 @@ var standardFields = map[string]bool{
 	"url":      true,
 	"username": true,
 	"notes":    true,
+	"otp":      true,
 }
 
 // osExit is a variable so tests can override it.
@@ -77,6 +78,8 @@ func main() {
 		runSet(args)
 	case "get":
 		runGet(args)
+	case "otp":
+		runOTP(args)
 	case "list":
 		runList(args)
 	case "rm":
@@ -105,6 +108,7 @@ Commands:
   configure     Configure S3 sync settings
   set <key>     Store or update a password entry
   get <key>     Retrieve a password entry
+  otp <key>     Generate the current TOTP code and copy it to the clipboard
   list          List all stored keys
   rm <key>      Delete a password entry
   push          Upload vault to S3
@@ -115,6 +119,19 @@ Flags:
   --store-path, -s   Path to encrypted store file (default: ~/.localpass/store.json, env: LOCALPASS_STORE_PATH)
   --config-path, -c  Path to config file (default: ~/.localpass/config.json, env: LOCALPASS_CONFIG_PATH)
   --help, -h         Show this help message
+
+TOTP / OTP:
+  Pass an otpauth:// URI or a bare Base32 secret to 'set' via --otp to attach a
+  2FA code generator to an entry. 'otp <key>' and 'get --display' compute codes
+  from the system clock — there is no NTP or clock-skew correction, so a wrong
+  machine clock yields wrong codes.
+
+set flags:
+  --otp <uri|secret>  Attach a TOTP otpauth:// URI or bare Base32 secret (validated)
+get flags:
+  --display, -d       Print entry fields (computes the OTP code, hides the URI)
+  --all, -a           Print all metadata (OTP seed masked unless --reveal-otp)
+  --reveal-otp        With --all, print the full raw otpauth:// URI (migration)
 `)
 }
 
@@ -290,6 +307,7 @@ func runSet(args []string) {
 	url, hasURL := parseFlag(flagArgs, "--url", "")
 	username, hasUsername := parseFlag(flagArgs, "--username", "")
 	notes, hasNotes := parseFlag(flagArgs, "--notes", "")
+	otpInput, hasOTP := parseFlag(flagArgs, "--otp", "")
 
 	// Parse --meta / -m flags (can be repeated: --meta key1=val1 --meta key2=val2)
 	metadata := parseMetaFlags(flagArgs)
@@ -317,6 +335,23 @@ func runSet(args []string) {
 		fmt.Print("Notes (optional): ")
 		notes = readLine()
 	}
+	if !hasOTP {
+		fmt.Print("OTP (otpauth:// URI or Base32 secret, optional): ")
+		otpInput = readLine()
+	}
+
+	// Validate and canonicalize the OTP input before doing anything destructive,
+	// so a bad seed (bad Base32, hotp, unknown algorithm) fails before we touch
+	// the vault. An empty input simply leaves any existing otp field untouched.
+	var otpURI string
+	if strings.TrimSpace(otpInput) != "" {
+		canonical, err := store.NormalizeOTP(otpInput, key)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: invalid OTP: %v\n", err)
+			osExit(1)
+		}
+		otpURI = canonical
+	}
 
 	// Check if entry already exists — after standard prompts so the user has
 	// context of what they're updating, but before custom metadata to avoid
@@ -343,6 +378,9 @@ func runSet(args []string) {
 	}
 	if notes != "" {
 		metadata["notes"] = notes
+	}
+	if otpURI != "" {
+		metadata["otp"] = otpURI
 	}
 
 	// Interactive metadata prompt for custom fields (only if no --meta flags given)
@@ -429,6 +467,7 @@ func runGet(args []string) {
 	noPrompt := hasFlag(flagArgs, "--no-prompt", "")
 	display := hasFlag(flagArgs, "--display", "-d")
 	showAll := hasFlag(flagArgs, "--all", "-a")
+	revealOTP := hasFlag(flagArgs, "--reveal-otp", "")
 
 	primaryPassword, err := resolvePrimaryPassword(noPrompt, "Enter primary password: ")
 	if err != nil {
@@ -466,7 +505,14 @@ func runGet(args []string) {
 
 			fmt.Printf("Key:        %s\n", key)
 			for _, k := range allKeys {
-				fmt.Printf("  %-10s %s\n", k+":", entry.Metadata[k])
+				val := entry.Metadata[k]
+				// The OTP seed is sensitive: mask it by default so a casual
+				// `get --all` (or a shoulder-surfer) never sees the raw secret.
+				// --reveal-otp prints it in full for the migration case.
+				if k == "otp" && !revealOTP {
+					val = store.MaskOTPSecret(val)
+				}
+				fmt.Printf("  %-10s %s\n", k+":", val)
 			}
 		} else {
 			// Known keys displayed in a fixed order
@@ -482,6 +528,15 @@ func runGet(args []string) {
 			for _, k := range knownOrder {
 				if v, ok := entry.Metadata[k]; ok {
 					fmt.Printf("%-12s %s\n", knownLabels[k]+":", v)
+				}
+			}
+
+			// Render a computed OTP code instead of the raw otpauth:// URI.
+			if uri, ok := entry.Metadata["otp"]; ok && uri != "" {
+				if code, remaining, err := store.GenerateOTP(uri, time.Now()); err == nil {
+					fmt.Printf("%-12s %s (%ds)\n", "OTP:", code, remaining)
+				} else {
+					fmt.Printf("%-12s <error: %v>\n", "OTP:", err)
 				}
 			}
 
@@ -514,6 +569,65 @@ func runGet(args []string) {
 			fmt.Printf("Password for '%s' copied to clipboard.\n", key)
 		}
 	}
+}
+
+// -- otp command ------------------------------------------------------------
+
+func runOTP(args []string) {
+	if len(args) < 1 || args[0] == "" || strings.HasPrefix(args[0], "-") {
+		fmt.Fprintf(os.Stderr, "Usage: localpass otp <key> [flags]\n")
+		osExit(1)
+	}
+
+	key := args[0]
+	flagArgs := args[1:]
+
+	storePath := resolveStorePath(flagArgs)
+	noPrompt := hasFlag(flagArgs, "--no-prompt", "")
+
+	primaryPassword, err := resolvePrimaryPassword(noPrompt, "Enter primary password: ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		osExit(1)
+	}
+
+	vault, err := loadStoreWithPassword(storePath, primaryPassword)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		osExit(1)
+	}
+
+	if _, statErr := os.Stat(storePath); os.IsNotExist(statErr) {
+		if len(vault.Entries) == 0 {
+			fmt.Fprintln(os.Stderr, "No vault found. Run 'localpass init' first.")
+			osExit(1)
+		}
+	}
+
+	entry, ok := vault.GetEntry(key)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "Entry '%s' not found.\n", key)
+		osExit(1)
+	}
+
+	uri := entry.Metadata["otp"]
+	if uri == "" {
+		fmt.Fprintf(os.Stderr, "Entry '%s' has no OTP configured. Add one with 'localpass set %s --otp <uri|secret>'.\n", key, key)
+		osExit(1)
+	}
+
+	code, remaining, err := store.GenerateOTP(uri, time.Now())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		osExit(1)
+	}
+
+	if err := copyToClipboard(code); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to copy to clipboard: %v\n", err)
+		fmt.Printf("OTP for '%s': %s (%ds remaining)\n", key, code, remaining)
+		return
+	}
+	fmt.Printf("OTP for '%s' copied to clipboard. (%ds remaining)\n", key, remaining)
 }
 
 // -- list command -----------------------------------------------------------

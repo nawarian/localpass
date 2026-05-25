@@ -10,6 +10,7 @@ import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import type { Entry, Vault } from "@localpass/core";
 import { loadStore } from "@localpass/core/dist/store.js";
 import { addEntry, deleteEntry, getEntry, listKeys } from "@localpass/core/dist/vault.js";
+import { generateOtp, normalizeOtp } from "@localpass/core/dist/otp.js";
 import {
   allocCustomId,
   base64ToBytes,
@@ -390,7 +391,100 @@ function DetailField({ label, value, secret }: { label: string; value: string; s
   );
 }
 
-const STANDARD_KEYS = new Set(["username", "email", "password", "url", "website", "notes"]);
+const STANDARD_KEYS = new Set(["username", "email", "password", "url", "website", "notes", "otp"]);
+
+// ---------- live OTP field ----------
+//
+// Computes the TOTP code from the entry's otpauth:// URI on a 1s tick (aligned
+// to the wall-clock second so the countdown stays accurate). The code itself is
+// recomputed every tick, so it rolls over exactly when the period boundary
+// passes. Click anywhere on the code to copy it.
+
+function formatOtp(code: string): string {
+  // Split into two readable halves (e.g. "123 456", "1234 5678").
+  const mid = Math.ceil(code.length / 2);
+  return `${code.slice(0, mid)} ${code.slice(mid)}`;
+}
+
+function OtpField({ uri }: { uri: string }) {
+  const [code, setCode] = useState<string | null>(null);
+  const [remaining, setRemaining] = useState(0);
+  const [period, setPeriod] = useState(30);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | undefined;
+    const tick = async () => {
+      try {
+        const res = await generateOtp(uri, Date.now());
+        if (cancelled) return;
+        setCode(res.code);
+        setRemaining(res.secondsRemaining);
+        setPeriod(res.period);
+        setError(null);
+      } catch (err) {
+        if (cancelled) return;
+        setError((err as Error).message);
+        return; // a broken URI won't fix itself — stop ticking
+      }
+      // Re-fire on the next wall-clock second so the countdown stays in step.
+      timer = window.setTimeout(tick, 1000 - (Date.now() % 1000));
+    };
+    void tick();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [uri]);
+
+  if (error) {
+    return (
+      <div class="px-3 py-2.5">
+        <div class="text-[11px] uppercase tracking-wider text-text-muted mb-0.5">one-time password</div>
+        <div class="text-sm text-red-400">Invalid OTP: {error}</div>
+      </div>
+    );
+  }
+
+  const pct = period > 0 ? (remaining / period) * 100 : 0;
+  // Tighten the ring colour as the window runs out.
+  const ringColor = remaining <= 5 ? "text-red-400" : "text-accent";
+
+  return (
+    <button
+      type="button"
+      class="w-full px-3 py-2.5 flex items-center gap-3 group text-left"
+      title="Copy one-time password"
+      onClick={() => code && copyToClipboard(code, "One-time password")}
+    >
+      <div class="flex-1 min-w-0">
+        <div class="text-[11px] uppercase tracking-wider text-text-muted mb-0.5">one-time password</div>
+        <div class="text-lg tracking-widest font-mono tabular-nums">
+          {code ? formatOtp(code) : "······"}
+        </div>
+      </div>
+      <div class={`flex items-center gap-1.5 ${ringColor}`} title={`${remaining}s remaining`}>
+        <svg viewBox="0 0 36 36" class="w-6 h-6 -rotate-90">
+          <circle cx="18" cy="18" r="15" fill="none" stroke="currentColor" stroke-opacity="0.2" stroke-width="4" />
+          <circle
+            cx="18"
+            cy="18"
+            r="15"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="4"
+            stroke-linecap="round"
+            stroke-dasharray={2 * Math.PI * 15}
+            stroke-dashoffset={2 * Math.PI * 15 * (1 - pct / 100)}
+          />
+        </svg>
+        <span class="text-xs tabular-nums w-5 text-right">{remaining}</span>
+      </div>
+      <IconCopy class="w-4 h-4 text-text-muted opacity-0 group-hover:opacity-100 transition-opacity" />
+    </button>
+  );
+}
 
 function DetailPane({
   vault,
@@ -420,6 +514,7 @@ function DetailPane({
   const username = meta["username"] || meta["email"] || "";
   const password = meta["password"] || "";
   const website = meta["url"] || meta["website"] || "";
+  const otp = meta["otp"] || "";
   const customFields = Object.entries(meta).filter(([k]) => !STANDARD_KEYS.has(k));
 
   const openAndFill = () => {
@@ -466,10 +561,11 @@ function DetailPane({
           </div>
         </div>
 
-        {(username || password || customFields.length > 0) && (
+        {(username || password || otp || customFields.length > 0) && (
           <div class="rounded-lg bg-surface border border-border divide-y divide-border">
             {username && <DetailField label="username" value={username} secret={false} />}
             {password && <DetailField label="password" value={password} secret={true} />}
+            {otp && <OtpField uri={otp} />}
             {customFields.map(([k, v]) => (
               <DetailField key={k} label={k} value={v} secret={/pass|secret|token/i.test(k)} />
             ))}
@@ -581,6 +677,21 @@ function EditPane({
             onInput={(e) => patch({ notes: (e.target as HTMLTextAreaElement).value })}
             class="mt-1 w-full bg-surface-2 border border-border focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 rounded-lg px-3 py-2 text-sm placeholder:text-text-dim resize-y"
           />
+        </label>
+
+        <label class="block">
+          <span class="text-[11px] uppercase tracking-wider text-text-muted">One-time password (OTP)</span>
+          <input
+            type="text"
+            autocomplete="off"
+            placeholder="otpauth:// URI or Base32 secret"
+            value={draft.otp}
+            onInput={(e) => patch({ otp: (e.target as HTMLInputElement).value })}
+            class="mt-1 w-full bg-surface-2 border border-border focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 rounded-lg px-3 py-2 text-sm placeholder:text-text-dim font-mono"
+          />
+          <span class="mt-1 block text-[11px] text-text-dim">
+            Validated on save. Codes use this device's clock.
+          </span>
         </label>
 
         <div class="rounded-lg bg-surface border border-border">
@@ -940,7 +1051,22 @@ function App() {
         return;
       }
 
-      const entry = draftToEntry(editDraft, editDraft.createdAt);
+      // Validate & canonicalize the OTP before persisting: a bad seed (bad
+      // Base32, hotp, unknown algorithm) must fail loudly here rather than be
+      // saved as an unusable field. An empty input clears any existing otp.
+      let draftForSave = editDraft;
+      const otpInput = editDraft.otp.trim();
+      if (otpInput) {
+        try {
+          const canonical = await normalizeOtp(otpInput, trimmedKey);
+          draftForSave = { ...editDraft, otp: canonical };
+        } catch (err) {
+          showSync("error", `Invalid OTP: ${(err as Error).message}`);
+          return;
+        }
+      }
+
+      const entry = draftToEntry(draftForSave, editDraft.createdAt);
       if (isRename && editDraft.originalKey) {
         deleteEntry(v, editDraft.originalKey);
       }

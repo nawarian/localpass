@@ -69,4 +69,5 @@ export const STANDARD_FIELDS = new Set([
   "url",
   "username",
   "notes",
+  "otp",
 ]);
