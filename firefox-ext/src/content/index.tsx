@@ -5,7 +5,14 @@
  * shows a dropdown of matching entries from the vault. Selecting an entry
  * fills the username + password fields and dispatches input/change events
  * so frameworks (React, Vue, etc.) see the value.
+ *
+ * Detection (field matching, MutationObserver, focusin fallback, fill) is all
+ * vanilla. Only the shadow-DOM indicator + dropdown UI is rendered with Preact
+ * into a closed shadow root; Tailwind can't cross the shadow boundary, so the
+ * scoped <style> blocks are rendered straight into each shadow root.
  */
+
+import { render } from "preact";
 
 type AutofillEntry = { key: string; username: string };
 
@@ -165,6 +172,278 @@ function findPasswordInputFor(usernameInput: HTMLInputElement): HTMLInputElement
   return null;
 }
 
+// ---------- shadow-DOM UI (Preact) ----------
+
+const INDICATOR_CSS = `
+  :host { all: initial; }
+  .btn {
+    width: 100%;
+    height: 100%;
+    border-radius: 6px;
+    border: 1px solid rgba(99,102,241,0.4);
+    background: rgba(26,26,28,0.92);
+    color: #c7d2fe;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .btn:hover { background: #6366f1; color: white; border-color: #6366f1; }
+  .btn svg { width: 14px; height: 14px; }
+`;
+
+const DROPDOWN_CSS = `
+  :host { all: initial; }
+  .panel {
+    background: #1a1a1c;
+    color: #e8e8ea;
+    border: 1px solid #2e2e33;
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 13px;
+    overflow: hidden;
+    max-height: 320px;
+    display: flex;
+    flex-direction: column;
+  }
+  .panel.loading {
+    color: #9b9ba1;
+    font-size: 12px;
+    padding: 14px;
+    text-align: center;
+  }
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: #232326;
+    border-bottom: 1px solid #2e2e33;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #9b9ba1;
+  }
+  .header .brand {
+    color: #c7d2fe;
+    font-weight: 600;
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: 12px;
+  }
+  .list { overflow-y: auto; flex: 1; padding: 4px; }
+  .group-label {
+    padding: 6px 10px 4px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #6e6e75;
+  }
+  .item {
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: 0;
+    color: inherit;
+    padding: 8px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font: inherit;
+  }
+  .item:hover, .item:focus { background: #2c2c30; outline: none; }
+  .avatar {
+    width: 26px; height: 26px;
+    border-radius: 6px;
+    background: #6366f1;
+    color: white;
+    font-size: 10px;
+    font-weight: 600;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .meta { flex: 1; min-width: 0; }
+  .meta .key { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .meta .user { font-size: 11px; color: #9b9ba1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .empty {
+    padding: 16px 12px;
+    text-align: center;
+    color: #9b9ba1;
+    font-size: 12px;
+  }
+  .action {
+    background: #6366f1;
+    color: white;
+    padding: 7px 12px;
+    border: 0;
+    border-radius: 6px;
+    cursor: pointer;
+    font: inherit;
+    margin: 6px 10px 10px;
+  }
+  .action:hover { background: #5b5fe0; }
+`;
+
+function Indicator({ onActivate }: { onActivate: () => void }) {
+  return (
+    <>
+      <style>{INDICATOR_CSS}</style>
+      <button
+        class="btn"
+        type="button"
+        aria-label="Open LocalPass"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onActivate();
+        }}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <circle cx="8" cy="14" r="4" />
+          <path d="M11 11l9-9" />
+          <path d="M16 6l3 3" />
+        </svg>
+      </button>
+    </>
+  );
+}
+
+function LoadingDropdown() {
+  return (
+    <>
+      <style>{DROPDOWN_CSS}</style>
+      <div class="panel loading">Loading…</div>
+    </>
+  );
+}
+
+function Item({ entry, onPick }: { entry: AutofillEntry; onPick: (key: string) => void }) {
+  return (
+    <button
+      class="item"
+      type="button"
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onPick(entry.key);
+      }}
+    >
+      <div class="avatar" style={`background: ${colorFor(entry.key)}`}>
+        {initials(entry.key)}
+      </div>
+      <div class="meta">
+        <div class="key">{entry.key}</div>
+        <div class="user">{entry.username || "—"}</div>
+      </div>
+    </button>
+  );
+}
+
+function OpenPopupButton({ label, onOpen }: { label: string; onOpen: () => void }) {
+  return (
+    <button
+      class="action"
+      type="button"
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onOpen();
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+function DropdownPanel({
+  result,
+  onPick,
+  onOpenPopup,
+}: {
+  result: QueryResult;
+  onPick: (key: string) => void;
+  onOpenPopup: () => void;
+}) {
+  let body;
+  if (result.state === "no_vault") {
+    body = (
+      <>
+        <div class="empty">
+          No vault yet.
+          <br />
+          Open LocalPass to set up.
+        </div>
+        <OpenPopupButton label="Open LocalPass" onOpen={onOpenPopup} />
+      </>
+    );
+  } else if (result.state === "locked") {
+    body = (
+      <>
+        <div class="empty">
+          <strong style="color:#e8e8ea">Vault is locked</strong>
+          <br />
+          Click below to unlock and autofill.
+        </div>
+        <OpenPopupButton label="Unlock LocalPass" onOpen={onOpenPopup} />
+      </>
+    );
+  } else {
+    const all = [...result.matches, ...result.others];
+    if (all.length === 0) {
+      body = <div class="empty">Vault is empty.</div>;
+    } else {
+      body = (
+        <>
+          {result.matches.length > 0 && (
+            <>
+              <div class="group-label">Matches this site</div>
+              {result.matches.map((e) => (
+                <Item key={e.key} entry={e} onPick={onPick} />
+              ))}
+            </>
+          )}
+          {result.others.length > 0 && (
+            <>
+              <div class="group-label">{result.matches.length > 0 ? "Other items" : "All items"}</div>
+              {result.others.map((e) => (
+                <Item key={e.key} entry={e} onPick={onPick} />
+              ))}
+            </>
+          )}
+        </>
+      );
+    }
+  }
+
+  return (
+    <>
+      <style>{DROPDOWN_CSS}</style>
+      <div class="panel">
+        <div class="header">
+          <span class="brand">LocalPass</span>
+        </div>
+        <div class="list">{body}</div>
+      </div>
+    </>
+  );
+}
+
 // ---------- indicator overlay ----------
 
 function positionOverPasswordField(target: HTMLElement, anchor: HTMLInputElement) {
@@ -185,44 +464,8 @@ function createIndicator(input: HTMLInputElement): HTMLElement {
     pointer-events: auto;
   `;
   const shadow = host.attachShadow({ mode: "closed" });
-  shadow.innerHTML = `
-    <style>
-      :host { all: initial; }
-      .btn {
-        width: 100%;
-        height: 100%;
-        border-radius: 6px;
-        border: 1px solid rgba(99,102,241,0.4);
-        background: rgba(26,26,28,0.92);
-        color: #c7d2fe;
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: 0;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.3);
-        transition: background 0.15s, border-color 0.15s;
-      }
-      .btn:hover { background: #6366f1; color: white; border-color: #6366f1; }
-      .btn svg { width: 14px; height: 14px; }
-    </style>
-    <button class="btn" type="button" aria-label="Open LocalPass">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-           stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="8" cy="14" r="4"/><path d="M11 11l9-9"/><path d="M16 6l3 3"/>
-      </svg>
-    </button>
-  `;
   positionOverPasswordField(host, input);
-
-  const btn = shadow.querySelector("button")!;
-  btn.addEventListener("mousedown", (e) => e.preventDefault());
-  btn.addEventListener("click", (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    void openDropdown(input);
-  });
-
+  render(<Indicator onActivate={() => void openDropdown(input)} />, shadow);
   document.documentElement.appendChild(host);
   return host;
 }
@@ -262,7 +505,7 @@ async function openDropdown(input: HTMLInputElement) {
   }
 }
 
-function showLoadingDropdown(input: HTMLInputElement) {
+function positionDropdownHost(input: HTMLInputElement): HTMLElement {
   const host = document.createElement("localpass-dropdown");
   const rect = input.getBoundingClientRect();
   const top = window.scrollY + rect.bottom + 4;
@@ -276,167 +519,34 @@ function showLoadingDropdown(input: HTMLInputElement) {
     z-index: ${Z_BASE + 1};
     pointer-events: auto;
   `;
+  return host;
+}
+
+function showLoadingDropdown(input: HTMLInputElement) {
+  const host = positionDropdownHost(input);
   const shadow = host.attachShadow({ mode: "closed" });
-  shadow.innerHTML = `
-    <style>
-      :host { all: initial; }
-      .panel {
-        background: #1a1a1c; color: #9b9ba1;
-        border: 1px solid #2e2e33; border-radius: 10px;
-        box-shadow: 0 8px 24px rgba(0,0,0,0.5);
-        font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
-        font-size: 12px; padding: 14px; text-align: center;
-      }
-    </style>
-    <div class="panel">Loading…</div>
-  `;
+  render(<LoadingDropdown />, shadow);
   document.documentElement.appendChild(host);
   activeDropdown = host;
 }
 
 function showDropdown(input: HTMLInputElement, result: QueryResult) {
-  const host = document.createElement("localpass-dropdown");
-  const rect = input.getBoundingClientRect();
-  const top = window.scrollY + rect.bottom + 4;
-  const left = window.scrollX + rect.left;
-  const width = Math.max(rect.width, 280);
-
-  host.style.cssText = `
-    position: absolute;
-    top: ${top}px;
-    left: ${left}px;
-    width: ${width}px;
-    z-index: ${Z_BASE + 1};
-    pointer-events: auto;
-  `;
+  const host = positionDropdownHost(input);
   const shadow = host.attachShadow({ mode: "closed" });
-  shadow.innerHTML = `
-    <style>
-      :host { all: initial; }
-      .panel {
-        background: #1a1a1c;
-        color: #e8e8ea;
-        border: 1px solid #2e2e33;
-        border-radius: 10px;
-        box-shadow: 0 8px 24px rgba(0,0,0,0.5);
-        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-        font-size: 13px;
-        overflow: hidden;
-        max-height: 320px;
-        display: flex;
-        flex-direction: column;
-      }
-      .header {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 8px 12px;
-        background: #232326;
-        border-bottom: 1px solid #2e2e33;
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        color: #9b9ba1;
-      }
-      .header .brand {
-        color: #c7d2fe;
-        font-weight: 600;
-        text-transform: none;
-        letter-spacing: 0;
-        font-size: 12px;
-      }
-      .list { overflow-y: auto; flex: 1; padding: 4px; }
-      .group-label {
-        padding: 6px 10px 4px;
-        font-size: 10px;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        color: #6e6e75;
-      }
-      .item {
-        width: 100%;
-        text-align: left;
-        background: transparent;
-        border: 0;
-        color: inherit;
-        padding: 8px 10px;
-        border-radius: 6px;
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        font: inherit;
-      }
-      .item:hover, .item:focus { background: #2c2c30; outline: none; }
-      .avatar {
-        width: 26px; height: 26px;
-        border-radius: 6px;
-        background: #6366f1;
-        color: white;
-        font-size: 10px;
-        font-weight: 600;
-        display: flex; align-items: center; justify-content: center;
-        flex-shrink: 0;
-      }
-      .meta { flex: 1; min-width: 0; }
-      .meta .key { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .meta .user { font-size: 11px; color: #9b9ba1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .empty {
-        padding: 16px 12px;
-        text-align: center;
-        color: #9b9ba1;
-        font-size: 12px;
-      }
-      .action {
-        background: #6366f1;
-        color: white;
-        padding: 7px 12px;
-        border: 0;
-        border-radius: 6px;
-        cursor: pointer;
-        font: inherit;
-        margin: 6px 10px 10px;
-      }
-      .action:hover { background: #5b5fe0; }
-    </style>
-    <div class="panel">
-      <div class="header">
-        <span class="brand">LocalPass</span>
-      </div>
-      <div class="list" id="list"></div>
-    </div>
-  `;
-
-  const list = shadow.getElementById("list")!;
-
-  if (result.state === "no_vault") {
-    list.innerHTML = `<div class="empty">No vault yet.<br/>Open LocalPass to set up.</div>`;
-    list.appendChild(makeOpenPopupButton(shadow, "Open LocalPass"));
-  } else if (result.state === "locked") {
-    list.innerHTML = `<div class="empty"><strong style="color:#e8e8ea">Vault is locked</strong><br/>Click below to unlock and autofill.</div>`;
-    list.appendChild(makeOpenPopupButton(shadow, "Unlock LocalPass"));
-  } else {
-    const all = [...result.matches, ...result.others];
-    if (all.length === 0) {
-      list.innerHTML = `<div class="empty">Vault is empty.</div>`;
-    } else {
-      if (result.matches.length > 0) {
-        const lbl = document.createElement("div");
-        lbl.className = "group-label";
-        lbl.textContent = "Matches this site";
-        list.appendChild(lbl);
-        for (const e of result.matches) list.appendChild(makeItem(e));
-      }
-      if (result.others.length > 0) {
-        const lbl = document.createElement("div");
-        lbl.className = "group-label";
-        lbl.textContent = result.matches.length > 0 ? "Other items" : "All items";
-        list.appendChild(lbl);
-        for (const e of result.others) list.appendChild(makeItem(e));
-      }
-    }
-  }
-
+  render(
+    <DropdownPanel
+      result={result}
+      onPick={(key) => {
+        void fillEntry(key);
+        clearDropdown();
+      }}
+      onOpenPopup={() => {
+        void sendMessage("OPEN_POPUP", {});
+        clearDropdown();
+      }}
+    />,
+    shadow,
+  );
   document.documentElement.appendChild(host);
   activeDropdown = host;
 
@@ -444,52 +554,6 @@ function showDropdown(input: HTMLInputElement, result: QueryResult) {
   setTimeout(() => document.addEventListener("mousedown", onOutsideMouseDown, true), 0);
   document.addEventListener("keydown", onKeyDown, true);
   window.addEventListener("scroll", clearDropdown, { passive: true, once: true });
-}
-
-function makeItem(entry: AutofillEntry): HTMLElement {
-  const btn = document.createElement("button");
-  btn.className = "item";
-  btn.type = "button";
-  const avatar = document.createElement("div");
-  avatar.className = "avatar";
-  avatar.style.background = colorFor(entry.key);
-  avatar.textContent = initials(entry.key);
-  const meta = document.createElement("div");
-  meta.className = "meta";
-  const key = document.createElement("div");
-  key.className = "key";
-  key.textContent = entry.key;
-  const user = document.createElement("div");
-  user.className = "user";
-  user.textContent = entry.username || "—";
-  meta.appendChild(key);
-  meta.appendChild(user);
-  btn.appendChild(avatar);
-  btn.appendChild(meta);
-  btn.addEventListener("mousedown", (e) => e.preventDefault());
-  btn.addEventListener("click", async (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    await fillEntry(entry.key);
-    clearDropdown();
-  });
-  return btn;
-}
-
-function makeOpenPopupButton(shadow: ShadowRoot, label = "Open LocalPass"): HTMLElement {
-  void shadow;
-  const btn = document.createElement("button");
-  btn.className = "action";
-  btn.type = "button";
-  btn.textContent = label;
-  btn.addEventListener("mousedown", (e) => e.preventDefault());
-  btn.addEventListener("click", async (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    await sendMessage("OPEN_POPUP", {});
-    clearDropdown();
-  });
-  return btn;
 }
 
 function onOutsideMouseDown(e: MouseEvent) {
