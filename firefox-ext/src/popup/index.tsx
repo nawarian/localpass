@@ -30,6 +30,7 @@ import {
   pushToS3,
   saveCachedVault,
   send,
+  touchVault,
   type EditDraft,
   type UIState,
 } from "./lib";
@@ -67,6 +68,7 @@ function flashToast(text: string, error = false) {
 }
 
 async function copyToClipboard(text: string, label: string) {
+  touchVault(); // copying is an explicit interaction — keep the vault alive
   try {
     await navigator.clipboard.writeText(text);
     flashToast(`${label} copied`);
@@ -356,7 +358,10 @@ function DetailField({ label, value, secret }: { label: string; value: string; s
         <button
           class="text-text-muted hover:text-text p-1 rounded"
           title="Reveal"
-          onClick={() => setRevealed((r) => !r)}
+          onClick={() => {
+            touchVault();
+            setRevealed((r) => !r);
+          }}
         >
           <IconEye class="w-4 h-4" />
         </button>
@@ -791,6 +796,8 @@ function App() {
         setVault(cached.vault);
         setPrimaryPassword(cached.primaryPassword);
         setUiState("unlocked");
+        // Opening the popup is itself an interaction — extend the idle timer.
+        touchVault();
         return;
       }
       setUiState(await determineInitialState());
@@ -823,11 +830,17 @@ function App() {
   const selectKey = useCallback(
     (key: string) => {
       if (editDraft && !confirm("Discard unsaved changes?")) return;
+      touchVault(); // selecting/opening an entry is a genuine interaction
       setSelectedKey(key);
       setEditDraft(null);
     },
     [editDraft],
   );
+
+  const onSearch = useCallback((q: string) => {
+    touchVault(); // typing in search keeps the vault alive (throttled)
+    setSearchQuery(q);
+  }, []);
 
   const saveDraft = useCallback(async () => {
     if (isSyncingRef.current) return;
@@ -961,7 +974,7 @@ function App() {
         selectedKey={selectedKey}
         searchQuery={searchQuery}
         editDraft={editDraft}
-        onSearch={setSearchQuery}
+        onSearch={onSearch}
         onLock={onLock}
         onSelect={selectKey}
         onNew={() => {

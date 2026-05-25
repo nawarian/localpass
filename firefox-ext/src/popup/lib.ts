@@ -126,6 +126,23 @@ export async function send<T = unknown>(type: string, payload?: unknown): Promis
   return (await browser.runtime.sendMessage({ type, payload })) as T;
 }
 
+// Sliding auto-lock: tell the background to push the idle timer forward on a
+// genuine user interaction. Throttled so a burst of keystrokes/clicks only
+// sends one message every few seconds — bumping expiresAt is cheap but we
+// don't need to spam the service worker (and a touch never resurrects an
+// already-expired vault, so the worst case is harmless).
+const TOUCH_THROTTLE_MS = 3_000;
+let lastTouchAt = 0;
+
+export function touchVault(): void {
+  const now = Date.now();
+  if (now - lastTouchAt < TOUCH_THROTTLE_MS) return;
+  lastTouchAt = now;
+  void send("VAULT_TOUCH").catch(() => {
+    /* background unavailable — expiry just won't extend this once */
+  });
+}
+
 export function bytesToBase64(data: Uint8Array): string {
   let bin = "";
   for (let i = 0; i < data.length; i++) bin += String.fromCharCode(data[i]);

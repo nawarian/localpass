@@ -11,6 +11,15 @@ import type { Config, Vault } from "@localpass/core";
 const CONFIG_KEY = "localpass:config";
 const VAULT_KEY = "localpass:vault";
 const SESSION_VAULT_KEY = "localpass:cached_vault";
+const SETTINGS_KEY = "localpass:settings";
+const DEFAULT_AUTO_LOCK_MIN = 5;
+
+async function getAutoLockMinutes(): Promise<number> {
+  const result = await browser.storage.local.get(SETTINGS_KEY);
+  const stored = result[SETTINGS_KEY] as { autoLockMinutes?: number } | undefined;
+  const min = stored?.autoLockMinutes;
+  return typeof min === "number" && min > 0 ? min : DEFAULT_AUTO_LOCK_MIN;
+}
 
 async function loadConfig(): Promise<Config | null> {
   const result = await browser.storage.local.get(CONFIG_KEY);
@@ -44,6 +53,27 @@ async function readCachedVault(): Promise<Vault | null> {
     return null;
   }
   return cached.vault;
+}
+
+/**
+ * Sliding-expiry bump: on a genuine user interaction, push `expiresAt` forward
+ * so an actively-used vault doesn't lock mid-task. Never resurrects an
+ * already-expired vault (lazy expiry has likely cleared it, but we guard
+ * anyway) and never touches the password/vault fields — expiry-only rewrite,
+ * so every other field is preserved verbatim.
+ */
+async function touchCachedVault(): Promise<void> {
+  const result = await browser.storage.session.get(SESSION_VAULT_KEY);
+  const cached = result[SESSION_VAULT_KEY] as
+    | { vault: Vault; primaryPassword?: string; expiresAt: number }
+    | undefined;
+  if (!cached) return;
+  if (Date.now() >= cached.expiresAt) return; // don't revive an expired vault
+  const minutes = await getAutoLockMinutes();
+  const expiresAt = Date.now() + minutes * 60_000;
+  await browser.storage.session.set({
+    [SESSION_VAULT_KEY]: { ...cached, expiresAt },
+  });
 }
 
 function hostnameOf(raw: string): string | null {
@@ -94,7 +124,7 @@ type AutofillQueryResult =
   | { state: "locked" }
   | { state: "unlocked"; matches: AutofillEntry[]; others: AutofillEntry[] };
 
-async function autofillQuery(pageUrl: string): Promise<AutofillQueryResult> {
+async function autofillQuery(pageUrl: string, interactive = false): Promise<AutofillQueryResult> {
   // Fast path: if a session vault is cached, skip the local-storage bytes
   // check entirely — saves one round-trip on the common (unlocked) case.
   const vault = await readCachedVault();
@@ -103,6 +133,10 @@ async function autofillQuery(pageUrl: string): Promise<AutofillQueryResult> {
     if (!bytes) return { state: "no_vault" };
     return { state: "locked" };
   }
+
+  // Only an explicit user action (opening the dropdown) extends the timer; the
+  // automatic page-load prime query passes interactive=false and must not.
+  if (interactive) await touchCachedVault();
 
   const pageHost = hostnameOf(pageUrl);
   const matches: AutofillEntry[] = [];
@@ -157,6 +191,8 @@ async function autofillFill(key: string): Promise<{ ok: false } | { ok: true; us
   if (!vault) return { ok: false };
   const entry = vault.entries[key];
   if (!entry) return { ok: false };
+  // Filling an entry is an explicit user action — extend the idle timer.
+  await touchCachedVault();
   const meta = entry.metadata || {};
   return {
     ok: true,
@@ -181,9 +217,33 @@ async function broadcastVaultUpdate(): Promise<void> {
   }
 }
 
+/**
+ * Decide whether a session-cache change is meaningful enough to broadcast.
+ *
+ * A sliding-expiry touch rewrites only `expiresAt`. Broadcasting on that would
+ * make content scripts re-run AUTOFILL_QUERY → touch again → re-broadcast, an
+ * infinite loop. So we broadcast only when the *meaningful* state changes:
+ *   - the vault appears or disappears (lock ↔ unlock), or
+ *   - its entries change.
+ * If both old and new exist and differ ONLY in `expiresAt`, we skip.
+ */
+function sessionChangeIsMeaningful(
+  oldValue: { vault?: Vault } | undefined,
+  newValue: { vault?: Vault } | undefined,
+): boolean {
+  // Appeared or disappeared → lock/unlock transition.
+  if (!oldValue || !newValue) return true;
+  // Both present: compare entries (the only user-visible vault state the
+  // content script renders). A pure expiry bump leaves these identical.
+  return JSON.stringify(oldValue.vault?.entries) !== JSON.stringify(newValue.vault?.entries);
+}
+
 browser.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === "session" && SESSION_VAULT_KEY in changes) {
-    void broadcastVaultUpdate();
+    const { oldValue, newValue } = changes[SESSION_VAULT_KEY];
+    if (sessionChangeIsMeaningful(oldValue, newValue)) {
+      void broadcastVaultUpdate();
+    }
   } else if (areaName === "local" && VAULT_KEY in changes) {
     void broadcastVaultUpdate();
   }
@@ -202,10 +262,14 @@ browser.runtime.onMessage.addListener((message: unknown) => {
       const p = msg.payload as { b64: string; keepSession?: boolean };
       return setVaultBytesB64(p.b64, p.keepSession === true).then(() => true);
     }
-    case "AUTOFILL_QUERY":
-      return autofillQuery((msg.payload as { url: string }).url);
+    case "AUTOFILL_QUERY": {
+      const p = msg.payload as { url: string; interactive?: boolean };
+      return autofillQuery(p.url, p.interactive === true);
+    }
     case "AUTOFILL_FILL":
       return autofillFill((msg.payload as { key: string }).key);
+    case "VAULT_TOUCH":
+      return touchCachedVault().then(() => true);
     case "OPEN_POPUP":
       return browser.action.openPopup().then(() => true).catch(() => false);
     default:

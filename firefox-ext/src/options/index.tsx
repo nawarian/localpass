@@ -53,6 +53,23 @@ function base64ToBytes(b64: string): Uint8Array {
   return bytes;
 }
 
+// Sliding auto-lock: configuring while the vault is unlocked should keep it
+// alive. We tell the background to bump expiresAt on any genuine interaction
+// with the page (typing, focusing a field, flipping a toggle). Throttled so a
+// burst of keystrokes only sends one message every few seconds; the background
+// never resurrects an already-expired vault, so this is safe even when locked.
+const TOUCH_THROTTLE_MS = 3_000;
+let lastTouchAt = 0;
+
+function touchVault(): void {
+  const now = Date.now();
+  if (now - lastTouchAt < TOUCH_THROTTLE_MS) return;
+  lastTouchAt = now;
+  void browser.runtime.sendMessage({ type: "VAULT_TOUCH" }).catch(() => {
+    /* background unavailable — expiry just won't extend this once */
+  });
+}
+
 async function loadSettings(): Promise<Settings> {
   const result = await browser.storage.local.get(SETTINGS_KEY);
   const stored = result[SETTINGS_KEY] as Partial<Settings> | undefined;
@@ -168,9 +185,21 @@ function Options() {
 
     if (browser.permissions?.onAdded) browser.permissions.onAdded.addListener(refreshAllSitesToggle);
     if (browser.permissions?.onRemoved) browser.permissions.onRemoved.addListener(refreshAllSitesToggle);
+
+    // Keep the vault alive while the user is actively configuring. `input`
+    // covers typing in fields, `change` covers toggles, `focusin` covers
+    // tabbing between fields — all genuine interactions.
+    const onInteract = () => touchVault();
+    document.addEventListener("input", onInteract);
+    document.addEventListener("change", onInteract);
+    document.addEventListener("focusin", onInteract);
+
     return () => {
       if (browser.permissions?.onAdded) browser.permissions.onAdded.removeListener(refreshAllSitesToggle);
       if (browser.permissions?.onRemoved) browser.permissions.onRemoved.removeListener(refreshAllSitesToggle);
+      document.removeEventListener("input", onInteract);
+      document.removeEventListener("change", onInteract);
+      document.removeEventListener("focusin", onInteract);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
