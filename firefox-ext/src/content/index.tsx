@@ -37,9 +37,22 @@ let activeField: HTMLInputElement | null = null;
 let cachedResult: QueryResult | null = null;
 let inflightQuery: Promise<QueryResult> | null = null;
 
-function refreshCache(): Promise<QueryResult> {
-  if (inflightQuery) return inflightQuery;
-  inflightQuery = sendMessage<QueryResult>("AUTOFILL_QUERY", { url: location.href })
+/**
+ * Query the background for matching entries and refresh the local cache.
+ *
+ * `interactive` distinguishes a genuine user action (opening the dropdown,
+ * which should reset the sliding auto-lock timer) from the automatic
+ * page-load prime / state-push refresh (which must NOT touch the timer, or an
+ * idle tab would keep the vault unlocked forever). When a query is already
+ * in flight we still upgrade it to interactive if this caller is interactive,
+ * so an open-dropdown right after a prime still counts.
+ */
+function refreshCache(interactive = false): Promise<QueryResult> {
+  if (inflightQuery) {
+    if (interactive) void sendMessage("VAULT_TOUCH", {}).catch(() => {});
+    return inflightQuery;
+  }
+  inflightQuery = sendMessage<QueryResult>("AUTOFILL_QUERY", { url: location.href, interactive })
     .then((r) => {
       cachedResult = r;
       return r;
@@ -489,14 +502,15 @@ async function openDropdown(input: HTMLInputElement) {
   if (cachedResult) {
     showDropdown(input, cachedResult);
     // refresh in the background so subsequent opens stay fresh, but don't
-    // make the user wait
-    refreshCache().catch(() => {});
+    // make the user wait. Opening the dropdown is an explicit user action, so
+    // this query resets the sliding auto-lock timer.
+    refreshCache(true).catch(() => {});
     return;
   }
 
   showLoadingDropdown(input);
   try {
-    const result = await refreshCache();
+    const result = await refreshCache(true);
     if (activeField !== input) return;
     clearDropdown();
     showDropdown(input, result);
