@@ -18,7 +18,8 @@ type Vault struct {
 //   "url"       - the URL
 //   "username"  - the username
 //   "notes"     - free-form notes/description
-// Any other keys are treated as custom metadata (e.g. "OTP Secret", "recovery_code").
+//   "otp"       - a canonical otpauth://totp/ URI for TOTP code generation
+// Any other keys are treated as custom metadata (e.g. "recovery_code").
 type Entry struct {
 	Metadata  map[string]string `json:"metadata"`
 	CreatedAt time.Time         `json:"created_at"`

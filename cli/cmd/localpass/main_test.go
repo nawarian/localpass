@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nawarian/localpass/cli/internal/config"
 	"github.com/nawarian/localpass/cli/internal/store"
@@ -55,11 +56,11 @@ func TestSetUpdateEntry(t *testing.T) {
 	runSet([]string{"mykey", "--store-path", storePath, "--password", "oldpass"})
 
 	// Second set with "y" confirmation via stdin
-	// Standard prompts come before update check: URL, Username, Notes (all empty),
-	// then update confirmation "y", then custom metadata (empty to finish).
+	// Standard prompts come before update check: URL, Username, Notes, OTP (all
+	// empty), then update confirmation "y", then custom metadata (empty to finish).
 	oldStdin := os.Stdin
 	r, w, _ := os.Pipe()
-	w.Write([]byte("\n\n\ny\n\n"))
+	w.Write([]byte("\n\n\n\ny\n\n"))
 	w.Close()
 	resetStdinReader()
 	os.Stdin = r
@@ -887,3 +888,197 @@ func TestConfigureUsesDefaultConfigPath(t *testing.T) {
 	}
 }
 
+
+// -- otp command & field tests ----------------------------------------------
+
+func captureStdout(t *testing.T) func() string {
+	t.Helper()
+	r, w, _ := os.Pipe()
+	oldStdout := os.Stdout
+	os.Stdout = w
+
+	done := make(chan struct{})
+	var buf bytes.Buffer
+	go func() {
+		buf.ReadFrom(r)
+		close(done)
+	}()
+
+	return func() string {
+		w.Close()
+		<-done
+		os.Stdout = oldStdout
+		return buf.String()
+	}
+}
+
+func TestSetWithOTPBareSecret(t *testing.T) {
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "store.json")
+
+	readPassword = func(fd int) ([]byte, error) { return []byte("pass"), nil }
+	runInit([]string{"--store-path", storePath})
+
+	readPassword = func(fd int) ([]byte, error) { return []byte("pass"), nil }
+	runSet([]string{"mykey", "--store-path", storePath, "--password", "secret", "--otp", "GEZDGNBVGY3TQOJQ"})
+
+	vault, err := store.LoadStore(storePath, "pass")
+	if err != nil {
+		t.Fatalf("LoadStore error: %v", err)
+	}
+	entry, ok := vault.GetEntry("mykey")
+	if !ok {
+		t.Fatal("expected entry 'mykey' to exist")
+	}
+	uri := entry.Metadata["otp"]
+	if !strings.HasPrefix(uri, "otpauth://totp/") {
+		t.Errorf("expected canonical otpauth URI, got %q", uri)
+	}
+	if _, _, err := store.GenerateOTP(uri, time.Now()); err != nil {
+		t.Errorf("stored otp URI should generate a code: %v", err)
+	}
+}
+
+func TestSetRejectsHOTP(t *testing.T) {
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "store.json")
+
+	readPassword = func(fd int) ([]byte, error) { return []byte("pass"), nil }
+	runInit([]string{"--store-path", storePath})
+
+	stderrBuf := captureStderr(t)
+	exitCode := 0
+	oldOsExit := osExit
+	osExit = func(code int) {
+		exitCode = code
+		panic("os.Exit")
+	}
+	defer func() { osExit = oldOsExit }()
+
+	func() {
+		defer func() { recover() }()
+		readPassword = func(fd int) ([]byte, error) { return []byte("pass"), nil }
+		runSet([]string{"mykey", "--store-path", storePath, "--password", "secret",
+			"--otp", "otpauth://hotp/x?secret=GEZDGNBVGY3TQOJQ&counter=0"})
+	}()
+
+	if exitCode != 1 {
+		t.Errorf("expected exit code 1, got %d", exitCode)
+	}
+	if !strings.Contains(stderrBuf(), "HOTP") {
+		t.Errorf("expected HOTP rejection, got: %s", stderrBuf())
+	}
+}
+
+func TestGetDisplayShowsOTP(t *testing.T) {
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "store.json")
+
+	readPassword = func(fd int) ([]byte, error) { return []byte("pass"), nil }
+	runInit([]string{"--store-path", storePath})
+
+	readPassword = func(fd int) ([]byte, error) { return []byte("pass"), nil }
+	runSet([]string{"mykey", "--store-path", storePath, "--password", "secret",
+		"--otp", "otpauth://totp/x?secret=GEZDGNBVGY3TQOJQ"})
+
+	getOut := captureStdout(t)
+	readPassword = func(fd int) ([]byte, error) { return []byte("pass"), nil }
+	runGet([]string{"mykey", "--store-path", storePath, "--display"})
+	out := getOut()
+
+	if !strings.Contains(out, "OTP:") {
+		t.Errorf("expected an OTP line, got: %s", out)
+	}
+	if strings.Contains(out, "otpauth://") || strings.Contains(out, "GEZDGNBVGY3TQOJQ") {
+		t.Errorf("raw otpauth URI/secret must not appear in --display, got: %s", out)
+	}
+}
+
+func TestGetAllMasksOTPUnlessRevealed(t *testing.T) {
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "store.json")
+
+	readPassword = func(fd int) ([]byte, error) { return []byte("pass"), nil }
+	runInit([]string{"--store-path", storePath})
+
+	readPassword = func(fd int) ([]byte, error) { return []byte("pass"), nil }
+	runSet([]string{"mykey", "--store-path", storePath, "--password", "secret",
+		"--otp", "otpauth://totp/x?secret=GEZDGNBVGY3TQOJQ"})
+
+	// Default: masked.
+	maskedOut := captureStdout(t)
+	readPassword = func(fd int) ([]byte, error) { return []byte("pass"), nil }
+	runGet([]string{"mykey", "--store-path", storePath, "--all"})
+	masked := maskedOut()
+	if strings.Contains(masked, "GEZDGNBVGY3TQOJQ") {
+		t.Errorf("seed leaked in --all without reveal: %s", masked)
+	}
+	if !strings.Contains(masked, "secret=****") {
+		t.Errorf("expected masked secret in --all, got: %s", masked)
+	}
+
+	// With --reveal-otp: full URI.
+	revealOut := captureStdout(t)
+	readPassword = func(fd int) ([]byte, error) { return []byte("pass"), nil }
+	runGet([]string{"mykey", "--store-path", storePath, "--all", "--reveal-otp"})
+	revealed := revealOut()
+	if !strings.Contains(revealed, "GEZDGNBVGY3TQOJQ") {
+		t.Errorf("expected raw seed with --reveal-otp, got: %s", revealed)
+	}
+}
+
+func TestOTPCommand(t *testing.T) {
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "store.json")
+
+	readPassword = func(fd int) ([]byte, error) { return []byte("pass"), nil }
+	runInit([]string{"--store-path", storePath})
+
+	readPassword = func(fd int) ([]byte, error) { return []byte("pass"), nil }
+	runSet([]string{"mykey", "--store-path", storePath, "--password", "secret",
+		"--otp", "otpauth://totp/x?secret=GEZDGNBVGY3TQOJQ"})
+
+	otpOut := captureStdout(t)
+	readPassword = func(fd int) ([]byte, error) { return []byte("pass"), nil }
+	runOTP([]string{"mykey", "--store-path", storePath})
+	out := otpOut()
+
+	// Output differs depending on whether a clipboard tool is present, but both
+	// branches name the entry and report remaining seconds.
+	if !strings.Contains(out, "mykey") || !strings.Contains(out, "remaining") {
+		t.Errorf("unexpected otp command output: %s", out)
+	}
+}
+
+func TestOTPCommandNoOTPConfigured(t *testing.T) {
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "store.json")
+
+	readPassword = func(fd int) ([]byte, error) { return []byte("pass"), nil }
+	runInit([]string{"--store-path", storePath})
+
+	readPassword = func(fd int) ([]byte, error) { return []byte("pass"), nil }
+	runSet([]string{"mykey", "--store-path", storePath, "--password", "secret"})
+
+	stderrBuf := captureStderr(t)
+	exitCode := 0
+	oldOsExit := osExit
+	osExit = func(code int) {
+		exitCode = code
+		panic("os.Exit")
+	}
+	defer func() { osExit = oldOsExit }()
+
+	func() {
+		defer func() { recover() }()
+		readPassword = func(fd int) ([]byte, error) { return []byte("pass"), nil }
+		runOTP([]string{"mykey", "--store-path", storePath})
+	}()
+
+	if exitCode != 1 {
+		t.Errorf("expected exit code 1, got %d", exitCode)
+	}
+	if !strings.Contains(stderrBuf(), "no OTP") {
+		t.Errorf("expected 'no OTP' message, got: %s", stderrBuf())
+	}
+}

@@ -220,6 +220,10 @@ export interface EditDraft {
   password: string;
   website: string;
   notes: string;
+  // Raw OTP input while editing (otpauth:// URI or bare Base32 secret). It is
+  // validated and canonicalized on save; the stored metadata always holds a
+  // canonical otpauth:// URI.
+  otp: string;
   custom: CustomField[];
   createdAt: string | null;
 }
@@ -241,7 +245,8 @@ export function entryToDraft(key: string, entry: Entry): EditDraft {
   const password = meta["password"] ?? "";
   const website = meta["url"] ?? meta["website"] ?? "";
   const notes = meta["notes"] ?? "";
-  const standard = new Set(["username", "email", "password", "url", "website", "notes"]);
+  const otp = meta["otp"] ?? "";
+  const standard = new Set(["username", "email", "password", "url", "website", "notes", "otp"]);
   const custom = Object.entries(meta)
     .filter(([k]) => !standard.has(k))
     .map(([name, value]) => ({ id: allocCustomId(), name, value }));
@@ -252,6 +257,7 @@ export function entryToDraft(key: string, entry: Entry): EditDraft {
     password,
     website,
     notes,
+    otp,
     custom,
     createdAt: entry.created_at,
   };
@@ -265,6 +271,7 @@ export function newDraft(): EditDraft {
     password: "",
     website: "",
     notes: "",
+    otp: "",
     custom: [],
     createdAt: null,
   };
@@ -276,6 +283,9 @@ export function draftToEntry(draft: EditDraft, prevCreatedAt: string | null): En
   if (draft.password) metadata["password"] = draft.password;
   if (draft.website) metadata["url"] = draft.website;
   if (draft.notes) metadata["notes"] = draft.notes;
+  // draft.otp is expected to already be a canonical otpauth:// URI (validated
+  // and normalized by the save flow before reaching here).
+  if (draft.otp) metadata["otp"] = draft.otp;
   for (const f of draft.custom) {
     const name = f.name.trim();
     if (!name) continue;
