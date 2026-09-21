@@ -8,6 +8,7 @@
 import { render } from "preact";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import type { Entry, Vault } from "@localpass/core";
+import { generateTotp, normalizeOtpInput, type OtpCode } from "@localpass/core/dist/otp.js";
 import { loadStore } from "@localpass/core/dist/store.js";
 import { addEntry, deleteEntry, getEntry, listKeys } from "@localpass/core/dist/vault.js";
 import {
@@ -34,6 +35,7 @@ import {
   savePopupUI,
   saveCachedVault,
   send,
+  STANDARD_KEYS,
   touchVault,
   type EditDraft,
   type UIState,
@@ -387,7 +389,105 @@ function DetailField({ label, value, secret }: { label: string; value: string; s
   );
 }
 
-const STANDARD_KEYS = new Set(["username", "email", "password", "url", "website", "notes"]);
+// ---------- one-time password ----------
+
+type TotpState = OtpCode | { error: string } | null;
+
+// Live TOTP for a stored otpauth URI. Ticks on each wall-clock second so the
+// countdown stays smooth and the code flips exactly at the period boundary.
+function useTotp(uri: string): TotpState {
+  const [state, setState] = useState<TotpState>(null);
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | undefined;
+    const tick = async () => {
+      try {
+        const res = await generateTotp(uri);
+        if (cancelled) return;
+        setState(res);
+      } catch (err) {
+        if (!cancelled) setState({ error: (err as Error).message });
+        return;
+      }
+      timer = window.setTimeout(tick, 1000 - (Date.now() % 1000) + 5);
+    };
+    void tick();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [uri]);
+  return state;
+}
+
+function groupDigits(code: string): string {
+  const mid = Math.floor(code.length / 2);
+  return `${code.slice(0, mid)} ${code.slice(mid)}`;
+}
+
+function OtpCountdown({ remaining, period }: { remaining: number; period: number }) {
+  const r = 8;
+  const circumference = 2 * Math.PI * r;
+  const urgent = remaining <= 5;
+  return (
+    <div
+      class={`flex items-center gap-1 text-xs font-mono tabular-nums ${urgent ? "text-amber-400" : "text-text-muted"}`}
+      title={`Code changes in ${remaining}s`}
+    >
+      <svg viewBox="0 0 20 20" class="w-4 h-4 -rotate-90">
+        <circle cx="10" cy="10" r={r} fill="none" stroke="currentColor" stroke-opacity="0.25" stroke-width="2.5" />
+        <circle
+          cx="10"
+          cy="10"
+          r={r}
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.5"
+          stroke-dasharray={circumference}
+          stroke-dashoffset={circumference * (1 - remaining / period)}
+        />
+      </svg>
+      {remaining}s
+    </div>
+  );
+}
+
+function OtpField({ uri }: { uri: string }) {
+  const totp = useTotp(uri);
+  const label = "one-time password";
+
+  if (totp && "error" in totp) {
+    return (
+      <div class="px-3 py-2.5">
+        <div class="text-[11px] uppercase tracking-wider text-text-muted mb-0.5">{label}</div>
+        <div class="text-xs text-red-400">{totp.error}</div>
+      </div>
+    );
+  }
+
+  const copy = () => {
+    if (totp) void copyToClipboard(totp.code, "One-time password");
+  };
+
+  return (
+    <div class="px-3 py-2.5 flex items-center gap-3">
+      <div class="flex-1 min-w-0">
+        <div class="text-[11px] uppercase tracking-wider text-text-muted mb-0.5">{label}</div>
+        <button
+          class="text-base font-mono tracking-wider hover:text-accent transition-colors"
+          title="Copy one-time password"
+          onClick={copy}
+        >
+          {totp ? groupDigits(totp.code) : "••• •••"}
+        </button>
+      </div>
+      {totp && <OtpCountdown remaining={totp.remaining} period={totp.period} />}
+      <button class="text-text-muted hover:text-text p-1 rounded" title="Copy one-time password" onClick={copy}>
+        <IconCopy class="w-4 h-4" />
+      </button>
+    </div>
+  );
+}
 
 function DetailPane({
   vault,
@@ -417,6 +517,7 @@ function DetailPane({
   const username = meta["username"] || meta["email"] || "";
   const password = meta["password"] || "";
   const website = meta["url"] || meta["website"] || "";
+  const otp = meta["otp"] || "";
   const customFields = Object.entries(meta).filter(([k]) => !STANDARD_KEYS.has(k));
 
   const openAndFill = () => {
@@ -463,10 +564,11 @@ function DetailPane({
           </div>
         </div>
 
-        {(username || password || customFields.length > 0) && (
+        {(username || password || otp || customFields.length > 0) && (
           <div class="rounded-lg bg-surface border border-border divide-y divide-border">
             {username && <DetailField label="username" value={username} secret={false} />}
             {password && <DetailField label="password" value={password} secret={true} />}
+            {otp && <OtpField uri={otp} />}
             {customFields.map(([k, v]) => (
               <DetailField key={k} label={k} value={v} secret={/pass|secret|token/i.test(k)} />
             ))}
@@ -564,6 +666,13 @@ function EditPane({
         <EditInput label="Name" value={draft.key} onInput={(v) => patch({ key: v })} placeholder="e.g. github.com" />
         <EditInput label="Username" value={draft.username} onInput={(v) => patch({ username: v })} />
         <EditInput label="Password" value={draft.password} onInput={(v) => patch({ password: v })} secret />
+        <EditInput
+          label="One-time password (TOTP)"
+          value={draft.otp}
+          onInput={(v) => patch({ otp: v })}
+          placeholder="otpauth://totp/… or Base32 secret"
+          secret
+        />
         <EditInput
           label="Website"
           value={draft.website}
@@ -826,7 +935,8 @@ function App() {
           setSelectedKey(snap.selectedKey);
           if (snap.editDraft) {
             ensureNextCustomId(snap.nextCustomId);
-            setEditDraft(snap.editDraft);
+            // Snapshots written before OTP support have no `otp` field.
+            setEditDraft({ ...snap.editDraft, otp: snap.editDraft.otp ?? "" });
           }
         }
         setHydrated(true);
@@ -923,6 +1033,18 @@ function App() {
 
     isSyncingRef.current = true;
     try {
+      // Validate + canonicalize the OTP before touching S3, so a typo never
+      // costs a round-trip or gets persisted.
+      let otp = "";
+      if (editDraft.otp.trim()) {
+        try {
+          otp = await normalizeOtpInput(editDraft.otp, trimmedKey);
+        } catch (err) {
+          showSync("error", `One-time password: ${(err as Error).message}`);
+          return;
+        }
+      }
+
       showSync("working", "Refreshing from S3…");
       await nextPaint();
       const refreshed = await pullAndDecrypt(primaryPassword);
@@ -937,7 +1059,7 @@ function App() {
         return;
       }
 
-      const entry = draftToEntry(editDraft, editDraft.createdAt);
+      const entry = draftToEntry({ ...editDraft, otp }, editDraft.createdAt);
       if (isRename && editDraft.originalKey) {
         deleteEntry(v, editDraft.originalKey);
       }

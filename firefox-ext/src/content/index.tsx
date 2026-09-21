@@ -4,7 +4,9 @@
  * Detects password inputs, overlays a small LocalPass icon, and on click
  * shows a dropdown of matching entries from the vault. Selecting an entry
  * fills the username + password fields and dispatches input/change events
- * so frameworks (React, Vue, etc.) see the value.
+ * so frameworks (React, Vue, etc.) see the value. One-time-code inputs get
+ * the same overlay, listing only entries with a TOTP secret; picking one fills
+ * the code that is valid at click time.
  *
  * Detection (field matching, MutationObserver, focusin fallback, fill) is all
  * vanilla. Only the shadow-DOM indicator + dropdown UI is rendered with Preact
@@ -14,7 +16,7 @@
 
 import { render } from "preact";
 
-type AutofillEntry = { key: string; username: string };
+type AutofillEntry = { key: string; username: string; hasOtp: boolean };
 
 type QueryResult =
   | { state: "no_vault" }
@@ -97,6 +99,47 @@ function isPasswordInput(node: Element | null): node is HTMLInputElement {
 }
 
 /**
+ * The page's own autocomplete tokens. attachTo() overwrites the attribute with
+ * "off" to silence the native dropdown, so prefer the stashed original.
+ */
+function autocompleteTokens(node: HTMLInputElement): string[] {
+  const ac = node.getAttribute(ATTR_ORIG_AUTOCOMPLETE) ?? node.getAttribute("autocomplete") ?? "";
+  return ac.toLowerCase().split(/\s+/).filter(Boolean);
+}
+
+/**
+ * Heuristic: is this a one-time-code (2FA) input? `autocomplete=one-time-code`
+ * or an explicit otp/2fa/mfa keyword is enough; a bare "code" keyword also
+ * needs a numeric hint (inputmode/type) or a 6–8 char maxlength, so promo and
+ * postal code fields don't match.
+ */
+function isOtpInput(node: Element | null): boolean {
+  if (!isCandidateInput(node)) return false;
+  const t = node.type;
+  if (t !== "text" && t !== "tel" && t !== "number" && t !== "") return false;
+  if (autocompleteTokens(node).includes("one-time-code")) return true;
+
+  const words = [
+    node.name || "",
+    node.id || "",
+    node.getAttribute("aria-label") || "",
+    node.placeholder || "",
+  ]
+    .join(" ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2") // totpCode → totp Code
+    .replace(/[_-]+/g, " ")
+    .toLowerCase();
+
+  if (/\b(otp|totp|2fa|mfa|one ?time|two ?factor)\b/.test(words)) return true;
+  if (/\bcode\b/.test(words)) {
+    const numeric = node.getAttribute("inputmode") === "numeric" || t === "tel" || t === "number";
+    const len = node.maxLength;
+    return numeric || (len >= 6 && len <= 8);
+  }
+  return false;
+}
+
+/**
  * Heuristic: does this input look like a username/email/login field?
  * Strong signals (autocomplete=username/email, type=email) win immediately;
  * otherwise fall back to keyword matching across name/id/aria/placeholder.
@@ -106,11 +149,11 @@ function isUsernameLikeInput(node: Element | null): node is HTMLInputElement {
   const t = node.type;
   if (t === "password") return false;
   if (t !== "text" && t !== "email" && t !== "tel" && t !== "") return false;
+  if (isOtpInput(node)) return false;
 
-  const ac = (node.getAttribute("autocomplete") || "").toLowerCase();
   // autocomplete is space-separated tokens; check membership rather than a
   // strict word boundary, so values like "username webauthn" still match.
-  const acTokens = ac.split(/\s+/);
+  const acTokens = autocompleteTokens(node);
   if (acTokens.includes("username") || acTokens.includes("email")) return true;
   if (t === "email") return true;
 
@@ -128,7 +171,7 @@ function isUsernameLikeInput(node: Element | null): node is HTMLInputElement {
 }
 
 function isAutofillTarget(node: Element | null): node is HTMLInputElement {
-  return isPasswordInput(node) || isUsernameLikeInput(node);
+  return isPasswordInput(node) || isUsernameLikeInput(node) || isOtpInput(node);
 }
 
 function suppressNativeAutocomplete(input: HTMLInputElement) {
@@ -344,7 +387,15 @@ function LoadingDropdown() {
   );
 }
 
-function Item({ entry, onPick }: { entry: AutofillEntry; onPick: (key: string) => void }) {
+function Item({
+  entry,
+  otpMode,
+  onPick,
+}: {
+  entry: AutofillEntry;
+  otpMode: boolean;
+  onPick: (key: string) => void;
+}) {
   return (
     <button
       class="item"
@@ -361,7 +412,7 @@ function Item({ entry, onPick }: { entry: AutofillEntry; onPick: (key: string) =
       </div>
       <div class="meta">
         <div class="key">{entry.key}</div>
-        <div class="user">{entry.username || "—"}</div>
+        <div class="user">{otpMode ? "Fill one-time code" : entry.username || "—"}</div>
       </div>
     </button>
   );
@@ -386,10 +437,12 @@ function OpenPopupButton({ label, onOpen }: { label: string; onOpen: () => void 
 
 function DropdownPanel({
   result,
+  otpMode,
   onPick,
   onOpenPopup,
 }: {
   result: QueryResult;
+  otpMode: boolean;
   onPick: (key: string) => void;
   onOpenPopup: () => void;
 }) {
@@ -417,25 +470,27 @@ function DropdownPanel({
       </>
     );
   } else {
-    const all = [...result.matches, ...result.others];
-    if (all.length === 0) {
-      body = <div class="empty">Vault is empty.</div>;
+    // On a one-time-code field only entries with a TOTP secret are useful.
+    const matches = otpMode ? result.matches.filter((e) => e.hasOtp) : result.matches;
+    const others = otpMode ? result.others.filter((e) => e.hasOtp) : result.others;
+    if (matches.length + others.length === 0) {
+      body = <div class="empty">{otpMode ? "No items with a one-time password." : "Vault is empty."}</div>;
     } else {
       body = (
         <>
-          {result.matches.length > 0 && (
+          {matches.length > 0 && (
             <>
               <div class="group-label">Matches this site</div>
-              {result.matches.map((e) => (
-                <Item key={e.key} entry={e} onPick={onPick} />
+              {matches.map((e) => (
+                <Item key={e.key} entry={e} otpMode={otpMode} onPick={onPick} />
               ))}
             </>
           )}
-          {result.others.length > 0 && (
+          {others.length > 0 && (
             <>
-              <div class="group-label">{result.matches.length > 0 ? "Other items" : "All items"}</div>
-              {result.others.map((e) => (
-                <Item key={e.key} entry={e} onPick={onPick} />
+              <div class="group-label">{matches.length > 0 ? "Other items" : "All items"}</div>
+              {others.map((e) => (
+                <Item key={e.key} entry={e} otpMode={otpMode} onPick={onPick} />
               ))}
             </>
           )}
@@ -450,6 +505,7 @@ function DropdownPanel({
       <div class="panel">
         <div class="header">
           <span class="brand">LocalPass</span>
+          {otpMode && <span>One-time code</span>}
         </div>
         <div class="list">{body}</div>
       </div>
@@ -547,11 +603,13 @@ function showLoadingDropdown(input: HTMLInputElement) {
 function showDropdown(input: HTMLInputElement, result: QueryResult) {
   const host = positionDropdownHost(input);
   const shadow = host.attachShadow({ mode: "closed" });
+  const otpMode = isOtpInput(input);
   render(
     <DropdownPanel
       result={result}
+      otpMode={otpMode}
       onPick={(key) => {
-        void fillEntry(key);
+        void (otpMode ? fillOtp(key) : fillEntry(key));
         clearDropdown();
       }}
       onOpenPopup={() => {
@@ -607,6 +665,13 @@ async function fillEntry(key: string) {
 
   if (usernameInput && res.username) setNativeValue(usernameInput, res.username);
   if (passwordInput && res.password) setNativeValue(passwordInput, res.password);
+}
+
+async function fillOtp(key: string) {
+  const field = activeField;
+  if (!field) return;
+  const res = await sendMessage<{ ok: false } | { ok: true; code: string }>("AUTOFILL_OTP", { key });
+  if (res.ok) setNativeValue(field, res.code);
 }
 
 function setNativeValue(input: HTMLInputElement, value: string) {

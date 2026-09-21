@@ -207,6 +207,10 @@ export function nextPaint(): Promise<void> {
 
 // ---------- edit draft ----------
 
+// Metadata keys with dedicated UI; everything else is a custom field.
+// `email` / `website` are legacy aliases of `username` / `url`.
+export const STANDARD_KEYS = new Set(["username", "email", "password", "url", "website", "notes", "otp"]);
+
 export interface CustomField {
   id: number;
   name: string;
@@ -220,6 +224,9 @@ export interface EditDraft {
   password: string;
   website: string;
   notes: string;
+  // Raw OTP input: a canonical otpauth:// URI when loaded from an entry, or
+  // whatever the user typed (URI or bare Base32 secret) until saved.
+  otp: string;
   custom: CustomField[];
   createdAt: string | null;
 }
@@ -241,9 +248,9 @@ export function entryToDraft(key: string, entry: Entry): EditDraft {
   const password = meta["password"] ?? "";
   const website = meta["url"] ?? meta["website"] ?? "";
   const notes = meta["notes"] ?? "";
-  const standard = new Set(["username", "email", "password", "url", "website", "notes"]);
+  const otp = meta["otp"] ?? "";
   const custom = Object.entries(meta)
-    .filter(([k]) => !standard.has(k))
+    .filter(([k]) => !STANDARD_KEYS.has(k))
     .map(([name, value]) => ({ id: allocCustomId(), name, value }));
   return {
     originalKey: key,
@@ -252,6 +259,7 @@ export function entryToDraft(key: string, entry: Entry): EditDraft {
     password,
     website,
     notes,
+    otp,
     custom,
     createdAt: entry.created_at,
   };
@@ -265,6 +273,7 @@ export function newDraft(): EditDraft {
     password: "",
     website: "",
     notes: "",
+    otp: "",
     custom: [],
     createdAt: null,
   };
@@ -276,6 +285,7 @@ export function draftToEntry(draft: EditDraft, prevCreatedAt: string | null): En
   if (draft.password) metadata["password"] = draft.password;
   if (draft.website) metadata["url"] = draft.website;
   if (draft.notes) metadata["notes"] = draft.notes;
+  if (draft.otp) metadata["otp"] = draft.otp;
   for (const f of draft.custom) {
     const name = f.name.trim();
     if (!name) continue;
