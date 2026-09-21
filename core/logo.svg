@@ -1,77 +1,28 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 580">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- LocalPass mark: an "L" (local) and an asterisk (password) inside a
+       draining countdown ring (OTP). Navy vault + brushed brass. -->
   <defs>
-    <radialGradient id="grad" cx="200" cy="100" r="260" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#38BCBA"/>
-      <stop offset="100%" stop-color="#259EA0"/>
-    </radialGradient>
-    <clipPath id="clip">
-      <circle cx="250" cy="210" r="182"/>
-    </clipPath>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#13213a"/>
+      <stop offset="1" stop-color="#0b1526"/>
+    </linearGradient>
+    <linearGradient id="brass" gradientUnits="userSpaceOnUse" x1="16" y1="16" x2="112" y2="112">
+      <stop offset="0" stop-color="#ecc878"/>
+      <stop offset=".55" stop-color="#d6a94e"/>
+      <stop offset="1" stop-color="#b08433"/>
+    </linearGradient>
   </defs>
-
-  <!-- Badge circle -->
-  <circle cx="250" cy="210" r="182" fill="url(#grad)"/>
-  <!-- Inner decorative ring -->
-  <circle cx="250" cy="210" r="168" fill="none" stroke="white" stroke-width="5"/>
-
-  <!-- White icon elements clipped to circle -->
-  <g clip-path="url(#clip)" fill="white">
-
-    <!-- KEY: bow (circular head) -->
-    <circle cx="250" cy="115" r="42"/>
-    <!-- KEY: blade -->
-    <rect x="243" y="115" width="14" height="183"/>
-    <!-- KEY: teeth (right side) -->
-    <rect x="257" y="183" width="16" height="13"/>
-    <rect x="257" y="212" width="11" height="13"/>
-    <rect x="257" y="243" width="16" height="13"/>
-
-    <!-- PINS — left side (inner to outer) -->
-    <circle cx="219" cy="140" r="13"/>
-    <rect x="214.5" y="140" width="9" height="158"/>
-
-    <circle cx="183" cy="177" r="13"/>
-    <rect x="178.5" y="177" width="9" height="121"/>
-
-    <circle cx="148" cy="207" r="13"/>
-    <rect x="143.5" y="207" width="9" height="91"/>
-
-    <circle cx="112" cy="234" r="13"/>
-    <rect x="107.5" y="234" width="9" height="64"/>
-
-    <!-- PINS — right side (inner to outer) -->
-    <circle cx="281" cy="140" r="13"/>
-    <rect x="276.5" y="140" width="9" height="158"/>
-
-    <circle cx="317" cy="177" r="13"/>
-    <rect x="312.5" y="177" width="9" height="121"/>
-
-    <circle cx="352" cy="207" r="13"/>
-    <rect x="347.5" y="207" width="9" height="91"/>
-
-    <circle cx="388" cy="234" r="13"/>
-    <rect x="383.5" y="234" width="9" height="64"/>
-
+  <rect width="128" height="128" rx="28" fill="url(#bg)"/>
+  <!-- countdown track, remaining time (72%), and "now" marker -->
+  <circle cx="64" cy="64" r="48" fill="none" stroke="#23344f" stroke-width="8"/>
+  <circle cx="64" cy="64" r="48" fill="none" stroke="url(#brass)" stroke-width="8" stroke-linecap="round" stroke-dasharray="217.15 301.59" transform="rotate(-90 64 64)"/>
+  <circle cx="16.85" cy="72.99" r="7.5" fill="#f4ecdc"/>
+  <!-- L -->
+  <path d="M46 40 V84 H82" fill="none" stroke="#f4ecdc" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- asterisk -->
+  <g stroke="url(#brass)" stroke-width="5.5" stroke-linecap="round">
+    <line x1="68" y1="51" x2="68" y2="69"/>
+    <line x1="60.21" y1="55.5" x2="75.79" y2="64.5"/>
+    <line x1="75.79" y1="55.5" x2="60.21" y2="64.5"/>
   </g>
-
-  <!-- Hole in key bow (teal punch-through over white shapes) -->
-  <circle cx="250" cy="108" r="17" fill="url(#grad)"/>
-
-  <!-- LOCALPASS -->
-  <text x="250" y="452"
-        font-family="'Arial Black', 'Helvetica Neue', Arial, sans-serif"
-        font-weight="900"
-        font-size="61"
-        fill="#27A4A3"
-        text-anchor="middle"
-        letter-spacing="1">LOCALPASS</text>
-
-  <!-- OWN IT -->
-  <text x="253" y="493"
-        font-family="Arial, Helvetica, sans-serif"
-        font-weight="400"
-        font-size="21"
-        fill="#27A4A3"
-        text-anchor="middle"
-        letter-spacing="11">OWN IT</text>
 </svg>

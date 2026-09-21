@@ -9,6 +9,7 @@
     ".": "./dist/index.js",
     "./config": "./dist/config.js",
     "./crypto": "./dist/crypto.js",
+    "./otp": "./dist/otp.js",
     "./s3": "./dist/s3.js",
     "./store": "./dist/store.js",
     "./vault": "./dist/vault.js"

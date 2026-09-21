@@ -16,7 +16,8 @@ Expected top-level contents after extracting the tarball:
 localpass/
 ├── Makefile            # build orchestrator (entry point)
 ├── core/               # @localpass/core — shared TypeScript library
-│   ├── logo.svg        # source of the extension icons
+│   ├── logo.svg        # source of the extension icons (48/96/128)
+│   ├── logo-small.svg  # small-size variant (16/32 toolbar icons)
 │   ├── package.json
 │   └── src/
 ├── firefox-ext/        # this extension
@@ -94,9 +95,9 @@ make package-firefox
 
 The final command runs, in order:
 
-1. `make icons` — regenerates `firefox-ext/icons/icon-{48,96}.png` from
-   `core/logo.svg` using ImageMagick, padded to square dimensions with a
-   transparent background.
+1. `make icons` — regenerates `firefox-ext/icons/icon-{16,32,48,96,128}.png`
+   using ImageMagick: 16/32 from `core/logo-small.svg`, the rest from
+   `core/logo.svg`.
 2. `make build-core` — compiles `core/` via `tsc` into `core/dist/`.
 3. `make build-firefox` — runs `parcel build manifest.json` inside
    `firefox-ext/`, then patches the built `dist/manifest.json` with `jq` to

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- LocalPass mark tuned for 16-32px (toolbar, favicon): heavier strokes,
+       flat colours, more contrast on the track. Same geometry as logo.svg. -->
+  <rect width="128" height="128" rx="24" fill="#12203a"/>
+  <circle cx="64" cy="64" r="45" fill="none" stroke="#2c4064" stroke-width="12"/>
+  <circle cx="64" cy="64" r="45" fill="none" stroke="#dcb05a" stroke-width="12" stroke-linecap="round" stroke-dasharray="203.58 282.74" transform="rotate(-90 64 64)"/>
+  <circle cx="19.80" cy="72.43" r="10" fill="#f4ecdc"/>
+  <path d="M44 38 V86 H84" fill="none" stroke="#f4ecdc" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+  <g stroke="#dcb05a" stroke-width="8" stroke-linecap="round">
+    <line x1="69.00" y1="48.00" x2="69.00" y2="70.00"/>
+    <line x1="59.47" y1="53.50" x2="78.53" y2="64.50"/>
+    <line x1="78.53" y1="53.50" x2="59.47" y2="64.50"/>
+  </g>
+</svg>

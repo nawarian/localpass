@@ -20,12 +20,13 @@ build-cli:
 build-core:
 	cd core && npm run build
 
-# Generate extension icons from core/logo.svg.
-# AMO requires square icons; logo.svg is not square, so we pad with a
-# transparent background after resizing to keep aspect ratio.
+# Generate extension icons from the square LocalPass mark.
+# 16/32 (toolbar) come from logo-small.svg, which is tuned for tiny sizes;
+# 48/96/128 (add-ons manager, AMO listing) come from logo.svg.
+# -density rasterises the SVG at high resolution before downscaling.
 icons:
-	convert core/logo.svg -resize 48x48 -background none -gravity center -extent 48x48 firefox-ext/icons/icon-48.png
-	convert core/logo.svg -resize 96x96 -background none -gravity center -extent 96x96 firefox-ext/icons/icon-96.png
+	for s in 16 32; do convert -background none -density 384 core/logo-small.svg -resize $${s}x$${s} firefox-ext/icons/icon-$$s.png; done
+	for s in 48 96 128; do convert -background none -density 384 core/logo.svg -resize $${s}x$${s} firefox-ext/icons/icon-$$s.png; done
 
 # Build the Firefox extension (depends on icons + core)
 # Parcel enforces service_worker for MV3, but Firefox temporary add-on loading

@@ -7,6 +7,7 @@
  */
 
 import type { Config, Vault } from "@localpass/core";
+import { generateTotp } from "@localpass/core/dist/otp.js";
 
 const CONFIG_KEY = "localpass:config";
 const VAULT_KEY = "localpass:vault";
@@ -117,7 +118,7 @@ function matchesPattern(pattern: string, pageHost: string): boolean {
   return pageHost === p || pageHost.endsWith(`.${p}`);
 }
 
-type AutofillEntry = { key: string; username: string };
+type AutofillEntry = { key: string; username: string; hasOtp: boolean };
 
 type AutofillQueryResult =
   | { state: "no_vault" }
@@ -145,7 +146,7 @@ async function autofillQuery(pageUrl: string, interactive = false): Promise<Auto
   for (const [key, entry] of Object.entries(vault.entries)) {
     const meta = entry.metadata || {};
     const username = meta["username"] || meta["email"] || "";
-    const summary: AutofillEntry = { key, username };
+    const summary: AutofillEntry = { key, username, hasOtp: !!meta["otp"] };
 
     let matched = false;
     if (pageHost) {
@@ -199,6 +200,24 @@ async function autofillFill(key: string): Promise<{ ok: false } | { ok: true; us
     username: meta["username"] || meta["email"] || "",
     password: meta["password"] || "",
   };
+}
+
+/**
+ * Compute the TOTP code for an entry at request time, so the code filled into
+ * the page is the one valid at the moment the user clicked.
+ */
+async function autofillOtp(key: string): Promise<{ ok: false } | { ok: true; code: string }> {
+  const vault = await readCachedVault();
+  if (!vault) return { ok: false };
+  const otp = vault.entries[key]?.metadata?.["otp"];
+  if (!otp) return { ok: false };
+  await touchCachedVault();
+  try {
+    const { code } = await generateTotp(otp);
+    return { ok: true, code };
+  } catch {
+    return { ok: false };
+  }
 }
 
 async function broadcastVaultUpdate(): Promise<void> {
@@ -268,6 +287,8 @@ browser.runtime.onMessage.addListener((message: unknown) => {
     }
     case "AUTOFILL_FILL":
       return autofillFill((msg.payload as { key: string }).key);
+    case "AUTOFILL_OTP":
+      return autofillOtp((msg.payload as { key: string }).key);
     case "VAULT_TOUCH":
       return touchCachedVault().then(() => true);
     case "OPEN_POPUP":
