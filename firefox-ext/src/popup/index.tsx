@@ -53,6 +53,7 @@ import {
   IconPlus,
   IconSearch,
   IconTrash,
+  Logo,
 } from "./icons";
 
 // ---------- imperative toast ----------
@@ -140,9 +141,7 @@ function PrimaryButton(props: {
 function HeaderSimple() {
   return (
     <div class="flex items-center gap-2 px-3 py-2.5 border-b border-border bg-surface">
-      <div class="w-6 h-6 rounded-md bg-gradient-to-br from-teal-400 to-teal-600 flex items-center justify-center">
-        <IconKey class="w-3.5 h-3.5 text-white" />
-      </div>
+      <Logo small class="w-6 h-6" />
       <div class="text-sm font-semibold">LocalPass</div>
       <button
         class="ml-auto text-text-muted hover:text-text p-1.5 rounded-md hover:bg-surface-2"
@@ -160,9 +159,7 @@ function HeaderSimple() {
 function NoConfig() {
   return (
     <div class="flex-1 flex flex-col items-center justify-center p-8 text-center">
-      <div class="w-14 h-14 rounded-full bg-surface-2 flex items-center justify-center mb-4">
-        <IconKey class="w-7 h-7 text-text-muted" />
-      </div>
+      <Logo class="w-14 h-14 mb-4" />
       <h1 class="text-base font-semibold mb-2">Welcome to LocalPass</h1>
       <p class="text-sm text-text-muted max-w-xs mb-5">
         Configure your S3 bucket and credentials to start syncing your encrypted vault.

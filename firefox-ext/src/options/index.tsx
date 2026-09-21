@@ -11,6 +11,7 @@ import type { Config } from "@localpass/core";
 import { s3Download } from "@localpass/core/dist/s3.js";
 import { loadStore } from "@localpass/core/dist/store.js";
 import { listKeys } from "@localpass/core/dist/vault.js";
+import { Logo } from "../popup/icons";
 
 interface Settings {
   autoLockMinutes: number;
@@ -380,21 +381,7 @@ function Options() {
   return (
     <main class="max-w-2xl mx-auto px-6 py-10">
       <header class="flex items-center gap-3 mb-8">
-        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-teal-400 to-teal-600 flex items-center justify-center shadow-lg shadow-teal-500/20">
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            class="w-5 h-5 text-white"
-          >
-            <circle cx="8" cy="14" r="4" />
-            <path d="M11 11l9-9" />
-            <path d="M16 6l3 3" />
-          </svg>
-        </div>
+        <Logo class="w-10 h-10 shadow-lg shadow-black/40 rounded-xl" />
         <div>
           <h1 class="text-xl font-semibold leading-tight">LocalPass</h1>
           <p class="text-xs text-text-muted">Settings</p>
