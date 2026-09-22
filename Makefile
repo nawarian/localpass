@@ -24,9 +24,14 @@ build-core:
 # 16/32 (toolbar) come from logo-small.svg, which is tuned for tiny sizes;
 # 48/96/128 (add-ons manager, AMO listing) come from logo.svg.
 # -density rasterises the SVG at high resolution before downscaling.
+# The same two SVGs are also emitted as Preact components into
+# firefox-ext/src/generated/logo.tsx for the in-app mark (popup, options,
+# autofill overlay), so every surface ships the exact same logo.
 icons:
+	mkdir -p firefox-ext/icons
 	for s in 16 32; do convert -background none -density 384 core/logo-small.svg -resize $${s}x$${s} firefox-ext/icons/icon-$$s.png; done
 	for s in 48 96 128; do convert -background none -density 384 core/logo.svg -resize $${s}x$${s} firefox-ext/icons/icon-$$s.png; done
+	node firefox-ext/scripts/gen-logo.mjs
 
 # Build the Firefox extension (depends on icons + core)
 # Parcel enforces service_worker for MV3, but Firefox temporary add-on loading

@@ -15,6 +15,7 @@
  */
 
 import { render } from "preact";
+import { Logo } from "../popup/icons";
 
 type AutofillEntry = { key: string; username: string; hasOtp: boolean };
 
@@ -235,20 +236,18 @@ const INDICATOR_CSS = `
   .btn {
     width: 100%;
     height: 100%;
-    border-radius: 6px;
-    border: 1px solid rgba(99,102,241,0.4);
-    background: rgba(26,26,28,0.92);
-    color: #c7d2fe;
+    border-radius: 5px;
+    border: 0;
+    background: none;
     cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    display: block;
     padding: 0;
+    overflow: hidden;
     box-shadow: 0 1px 4px rgba(0,0,0,0.3);
-    transition: background 0.15s, border-color 0.15s;
+    transition: box-shadow 0.15s;
   }
-  .btn:hover { background: #6366f1; color: white; border-color: #6366f1; }
-  .btn svg { width: 14px; height: 14px; }
+  .btn:hover, .btn:focus-visible { outline: none; box-shadow: 0 0 0 2px #dcb05a, 0 1px 4px rgba(0,0,0,0.3); }
+  .mark { width: 100%; height: 100%; }
 `;
 
 const DROPDOWN_CSS = `
@@ -284,8 +283,9 @@ const DROPDOWN_CSS = `
     letter-spacing: 0.5px;
     color: #9b9ba1;
   }
+  .header .mark { width: 16px; height: 16px; }
   .header .brand {
-    color: #c7d2fe;
+    color: #f4ecdc;
     font-weight: 600;
     text-transform: none;
     letter-spacing: 0;
@@ -361,18 +361,7 @@ function Indicator({ onActivate }: { onActivate: () => void }) {
           onActivate();
         }}
       >
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <circle cx="8" cy="14" r="4" />
-          <path d="M11 11l9-9" />
-          <path d="M16 6l3 3" />
-        </svg>
+        <Logo small class="mark" />
       </button>
     </>
   );
@@ -504,6 +493,7 @@ function DropdownPanel({
       <style>{DROPDOWN_CSS}</style>
       <div class="panel">
         <div class="header">
+          <Logo small class="mark" />
           <span class="brand">LocalPass</span>
           {otpMode && <span>One-time code</span>}
         </div>

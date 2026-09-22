@@ -3,3 +3,4 @@ dist
 *.zip
 icons/icon-*.png
 .parcel-cache
+src/generated/
