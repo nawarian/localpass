@@ -35,10 +35,16 @@ icons:
 
 # Build the Firefox extension (depends on icons + core)
 # Parcel enforces service_worker for MV3, but Firefox temporary add-on loading
-# needs background.scripts. We patch the dist manifest post-build.
+# needs background.scripts. We patch the dist manifest post-build, pointing
+# scripts at the service_worker bundle and deleting the duplicate bundle Parcel
+# built for the original scripts entry.
+# Everything left in dist gets packed into the signed/uploaded XPI, so dist is
+# wiped first (Parcel never removes old hashed bundles) and no orphan survives.
 build-firefox: icons build-core
+	rm -rf firefox-ext/dist
 	cd firefox-ext && npx parcel build manifest.json --no-scope-hoist
 	cd firefox-ext/dist && mv manifest.json manifest_.json && \
+	  jq -r '.background.service_worker as $$sw | .background.scripts[] | select(. != $$sw)' manifest_.json | xargs -r rm -f && \
 	  jq '.background.scripts = [.background.service_worker] | del(.background.service_worker)' manifest_.json > manifest.json && \
 	  rm manifest_.json
 
