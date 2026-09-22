@@ -2,25 +2,25 @@
   <!-- LocalPass mark: an "L" (local) and an asterisk (password) inside a
        draining countdown ring (OTP). Navy vault + brushed brass. -->
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+    <linearGradient id="lp-logo-bg" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#13213a"/>
       <stop offset="1" stop-color="#0b1526"/>
     </linearGradient>
-    <linearGradient id="brass" gradientUnits="userSpaceOnUse" x1="16" y1="16" x2="112" y2="112">
+    <linearGradient id="lp-logo-brass" gradientUnits="userSpaceOnUse" x1="16" y1="16" x2="112" y2="112">
       <stop offset="0" stop-color="#ecc878"/>
       <stop offset=".55" stop-color="#d6a94e"/>
       <stop offset="1" stop-color="#b08433"/>
     </linearGradient>
   </defs>
-  <rect width="128" height="128" rx="28" fill="url(#bg)"/>
+  <rect width="128" height="128" rx="28" fill="url(#lp-logo-bg)"/>
   <!-- countdown track, remaining time (72%), and "now" marker -->
   <circle cx="64" cy="64" r="48" fill="none" stroke="#23344f" stroke-width="8"/>
-  <circle cx="64" cy="64" r="48" fill="none" stroke="url(#brass)" stroke-width="8" stroke-linecap="round" stroke-dasharray="217.15 301.59" transform="rotate(-90 64 64)"/>
+  <circle cx="64" cy="64" r="48" fill="none" stroke="url(#lp-logo-brass)" stroke-width="8" stroke-linecap="round" stroke-dasharray="217.15 301.59" transform="rotate(-90 64 64)"/>
   <circle cx="16.85" cy="72.99" r="7.5" fill="#f4ecdc"/>
   <!-- L -->
   <path d="M46 40 V84 H82" fill="none" stroke="#f4ecdc" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
   <!-- asterisk -->
-  <g stroke="url(#brass)" stroke-width="5.5" stroke-linecap="round">
+  <g stroke="url(#lp-logo-brass)" stroke-width="5.5" stroke-linecap="round">
     <line x1="68" y1="51" x2="68" y2="69"/>
     <line x1="60.21" y1="55.5" x2="75.79" y2="64.5"/>
     <line x1="75.79" y1="55.5" x2="60.21" y2="64.5"/>
