@@ -1,43 +1,35 @@
 /**
  * LocalPass Popup — non-UI logic.
  *
- * Decryption happens in the popup (a stable page); the background only stores
- * config + encrypted bytes — service-worker memory isn't reliable. Everything
- * here is framework-agnostic so the Preact components stay declarative.
+ * Decryption happens in the popup (a stable page); the background keeps no
+ * decrypted state of its own — service-worker memory isn't reliable. Vault
+ * persistence + S3 sync live in ../shared/vault-store (shared with the
+ * background's sign-up saves) and are re-exported here. Everything here is
+ * framework-agnostic so the Preact components stay declarative.
  */
 
 import type { Config, Entry, Vault } from "@localpass/core";
-import { s3Download, s3Upload } from "@localpass/core/dist/s3.js";
-import { loadStore, saveStore } from "@localpass/core/dist/store.js";
+import { SESSION_VAULT_KEY, clearPendingCredentials, type CachedVault } from "../shared/vault-store";
+
+export {
+  base64ToBytes,
+  bytesToBase64,
+  getSettings,
+  persistVault,
+  pullAndDecrypt,
+  pullFromS3,
+  pushToS3,
+  saveCachedVault,
+  withVaultLock,
+  type Settings,
+} from "../shared/vault-store";
 
 export type UIState = "no_config" | "no_vault" | "locked" | "unlocked";
 
-export interface Settings {
-  autoLockMinutes: number;
-}
-
-const SETTINGS_KEY = "localpass:settings";
-const SESSION_VAULT_KEY = "localpass:cached_vault";
 const POPUP_UI_KEY = "localpass:popup_ui";
-const DEFAULT_AUTO_LOCK_MIN = 5;
 const SITES_PROMPTED_KEY = "localpass:sites_prompted";
 
 // ---------- settings & session cache ----------
-
-export async function getSettings(): Promise<Settings> {
-  const result = await browser.storage.local.get(SETTINGS_KEY);
-  const stored = result[SETTINGS_KEY] as Partial<Settings> | undefined;
-  const min = stored?.autoLockMinutes;
-  return {
-    autoLockMinutes: typeof min === "number" && min > 0 ? min : DEFAULT_AUTO_LOCK_MIN,
-  };
-}
-
-interface CachedVault {
-  vault: Vault;
-  primaryPassword: string;
-  expiresAt: number;
-}
 
 export async function loadCachedVault(): Promise<{ vault: Vault; primaryPassword: string } | null> {
   const result = await browser.storage.session.get(SESSION_VAULT_KEY);
@@ -48,29 +40,26 @@ export async function loadCachedVault(): Promise<{ vault: Vault; primaryPassword
     // (which may hold a half-typed draft/password) together.
     await browser.storage.session.remove(SESSION_VAULT_KEY);
     await clearPopupUI();
+    await clearPendingCredentials();
     return null;
   }
   // Older cache shape had no primaryPassword (or used the legacy field name). Treat as locked.
   if (typeof cached.primaryPassword !== "string" || !cached.primaryPassword) {
     await browser.storage.session.remove(SESSION_VAULT_KEY);
     await clearPopupUI();
+    await clearPendingCredentials();
     return null;
   }
   return { vault: cached.vault, primaryPassword: cached.primaryPassword };
 }
 
-export async function saveCachedVault(v: Vault, password: string): Promise<void> {
-  const settings = await getSettings();
-  const expiresAt = Date.now() + settings.autoLockMinutes * 60_000;
-  const payload: CachedVault = { vault: v, primaryPassword: password, expiresAt };
-  await browser.storage.session.set({ [SESSION_VAULT_KEY]: payload });
-}
-
 export async function clearCachedVault(): Promise<void> {
   await browser.storage.session.remove(SESSION_VAULT_KEY);
-  // Locking / clearing the vault must also drop any transient UI snapshot so a
-  // leftover draft or typed password can't resurface on reopen.
+  // Locking / clearing the vault must also drop any transient UI snapshot and
+  // unsaved generated passwords, so a leftover draft or password can't
+  // resurface on reopen.
   await clearPopupUI();
+  await clearPendingCredentials();
 }
 
 // ---------- transient popup UI snapshot ----------
@@ -180,19 +169,6 @@ export function touchVault(): void {
   void send("VAULT_TOUCH").catch(() => {
     /* background unavailable — expiry just won't extend this once */
   });
-}
-
-export function bytesToBase64(data: Uint8Array): string {
-  let bin = "";
-  for (let i = 0; i < data.length; i++) bin += String.fromCharCode(data[i]);
-  return btoa(bin);
-}
-
-export function base64ToBytes(b64: string): Uint8Array {
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return bytes;
 }
 
 // Wait until the browser has actually painted. Argon2id key derivation is a
@@ -309,92 +285,3 @@ export async function determineInitialState(): Promise<UIState> {
   return "locked";
 }
 
-// ---------- persist / push / pull ----------
-
-type Result = { ok: true } | { ok: false; error: string };
-
-export async function persistVault(
-  vault: Vault,
-  primaryPassword: string,
-): Promise<Result> {
-  try {
-    const bytes = await saveStore(vault, primaryPassword);
-    await send("VAULT_BYTES_SET", { b64: bytesToBase64(bytes), keepSession: true });
-    await saveCachedVault(vault, primaryPassword);
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: (err as Error).message };
-  }
-}
-
-export async function pushToS3(): Promise<Result> {
-  const cfg = await send<Config | null>("CONFIG_GET");
-  if (!cfg) return { ok: false, error: "No config saved." };
-  if (!cfg.s3_bucket || !cfg.s3_key || !cfg.aws_access_key_id || !cfg.aws_secret_access_key) {
-    return { ok: false, error: "Incomplete S3 configuration." };
-  }
-  const b64 = await send<string | null>("VAULT_BYTES_GET");
-  if (!b64) return { ok: false, error: "No vault data to push." };
-  try {
-    await s3Upload(
-      {
-        endpoint: cfg.s3_endpoint || undefined,
-        region: cfg.s3_region || "us-east-1",
-        bucket: cfg.s3_bucket,
-        key: cfg.s3_key,
-        accessKeyId: cfg.aws_access_key_id,
-        secretAccessKey: cfg.aws_secret_access_key,
-      },
-      base64ToBytes(b64),
-    );
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: (err as Error).message };
-  }
-}
-
-export async function pullFromS3(): Promise<Result> {
-  const cfg = await send<Config | null>("CONFIG_GET");
-  if (!cfg) return { ok: false, error: "No config saved." };
-  if (!cfg.s3_bucket || !cfg.s3_key || !cfg.aws_access_key_id || !cfg.aws_secret_access_key) {
-    return { ok: false, error: "Incomplete S3 configuration." };
-  }
-  try {
-    const data = await s3Download({
-      endpoint: cfg.s3_endpoint || undefined,
-      region: cfg.s3_region || "us-east-1",
-      bucket: cfg.s3_bucket,
-      key: cfg.s3_key,
-      accessKeyId: cfg.aws_access_key_id,
-      secretAccessKey: cfg.aws_secret_access_key,
-    });
-    await send("VAULT_BYTES_SET", { b64: bytesToBase64(data) });
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: (err as Error).message };
-  }
-}
-
-export async function pullAndDecrypt(
-  primaryPassword: string | null,
-): Promise<{ ok: true; vault: Vault } | { ok: false; error: string }> {
-  if (!primaryPassword) return { ok: false, error: "Vault is locked." };
-  const pullRes = await pullFromS3();
-  if (!pullRes.ok) return { ok: false, error: pullRes.error };
-  const b64 = await send<string | null>("VAULT_BYTES_GET");
-  if (!b64) return { ok: false, error: "No vault data after refresh." };
-  try {
-    const fresh = await loadStore(base64ToBytes(b64), primaryPassword);
-    await saveCachedVault(fresh, primaryPassword);
-    return { ok: true, vault: fresh };
-  } catch (err) {
-    const msg = (err as Error).message;
-    if (/wrong primary password|WRONG_PASSWORD/i.test(msg)) {
-      return {
-        ok: false,
-        error: "Cached password no longer matches the vault on S3. Lock and unlock again.",
-      };
-    }
-    return { ok: false, error: msg };
-  }
-}

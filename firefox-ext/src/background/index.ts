@@ -3,46 +3,36 @@
  *
  * Stores config and encrypted vault bytes. The decrypted vault is cached in
  * browser.storage.session (in-memory, owned by the popup). Background reads
- * it to serve autofill requests from content scripts.
+ * it to serve autofill requests from content scripts, and saves passwords
+ * generated on sign-up forms (see ./signup.ts).
  */
 
 import type { Config, Vault } from "@localpass/core";
+import { generatePassword } from "@localpass/core/dist/generator.js";
 import { generateTotp } from "@localpass/core/dist/otp.js";
-
-const CONFIG_KEY = "localpass:config";
-const VAULT_KEY = "localpass:vault";
-const SESSION_VAULT_KEY = "localpass:cached_vault";
-const SETTINGS_KEY = "localpass:settings";
-const DEFAULT_AUTO_LOCK_MIN = 5;
-
-async function getAutoLockMinutes(): Promise<number> {
-  const result = await browser.storage.local.get(SETTINGS_KEY);
-  const stored = result[SETTINGS_KEY] as { autoLockMinutes?: number } | undefined;
-  const min = stored?.autoLockMinutes;
-  return typeof min === "number" && min > 0 ? min : DEFAULT_AUTO_LOCK_MIN;
-}
-
-async function loadConfig(): Promise<Config | null> {
-  const result = await browser.storage.local.get(CONFIG_KEY);
-  return (result[CONFIG_KEY] as Config) ?? null;
-}
+import {
+  CONFIG_KEY,
+  SESSION_VAULT_KEY,
+  VAULT_KEY,
+  clearPendingCredentials,
+  getSettings,
+  getVaultBytesB64,
+  loadConfig,
+  setVaultBytesB64,
+} from "../shared/vault-store";
+import {
+  discardPending,
+  isUnlocked,
+  listPending,
+  originOf,
+  saveFromSubmit,
+  savePending,
+  setPending,
+  type SaveCredentialResult,
+} from "./signup";
 
 async function saveConfig(config: Config): Promise<void> {
   await browser.storage.local.set({ [CONFIG_KEY]: config });
-}
-
-async function getVaultBytesB64(): Promise<string | null> {
-  const result = await browser.storage.local.get(VAULT_KEY);
-  return (result[VAULT_KEY] as string | undefined) ?? null;
-}
-
-async function setVaultBytesB64(b64: string, keepSession = false): Promise<void> {
-  await browser.storage.local.set({ [VAULT_KEY]: b64 });
-  if (!keepSession) {
-    // New bytes may have been encrypted with a different password, so the
-    // previously cached unlocked vault is no longer valid. Force re-unlock.
-    await browser.storage.session.remove(SESSION_VAULT_KEY);
-  }
 }
 
 async function readCachedVault(): Promise<Vault | null> {
@@ -51,6 +41,7 @@ async function readCachedVault(): Promise<Vault | null> {
   if (!cached) return null;
   if (Date.now() >= cached.expiresAt) {
     await browser.storage.session.remove(SESSION_VAULT_KEY);
+    await clearPendingCredentials();
     return null;
   }
   return cached.vault;
@@ -70,7 +61,7 @@ async function touchCachedVault(): Promise<void> {
     | undefined;
   if (!cached) return;
   if (Date.now() >= cached.expiresAt) return; // don't revive an expired vault
-  const minutes = await getAutoLockMinutes();
+  const minutes = (await getSettings()).autoLockMinutes;
   const expiresAt = Date.now() + minutes * 60_000;
   await browser.storage.session.set({
     [SESSION_VAULT_KEY]: { ...cached, expiresAt },
@@ -220,6 +211,21 @@ async function autofillOtp(key: string): Promise<{ ok: false } | { ok: true; cod
   }
 }
 
+/**
+ * Tell the tab how a sign-up save went. Sent as a fresh message rather than a
+ * reply, because a form submit usually navigates away and the new page's
+ * content script is the one still around to show it.
+ */
+function notifySaveResult(tabId: number | undefined, res: SaveCredentialResult): void {
+  if (tabId === undefined) return;
+  const toast = !res.ok
+    ? { kind: "error", text: `Couldn't save password: ${res.error}` }
+    : res.synced
+    ? { kind: "success", text: `Saved to LocalPass as "${res.key}"` }
+    : { kind: "error", text: `Saved as "${res.key}", but ${res.error}` };
+  browser.tabs.sendMessage(tabId, { type: "LOCALPASS_TOAST", ...toast }).catch(() => {});
+}
+
 async function broadcastVaultUpdate(): Promise<void> {
   try {
     const tabs = await browser.tabs.query({});
@@ -268,8 +274,12 @@ browser.storage.onChanged.addListener((changes, areaName) => {
   }
 });
 
-browser.runtime.onMessage.addListener((message: unknown) => {
+browser.runtime.onMessage.addListener((message: unknown, sender: browser.runtime.MessageSender) => {
   const msg = message as { type: string; payload?: unknown };
+  // Sign-up messages from a content script act on the sender page's origin,
+  // never on an origin named in the payload.
+  const senderOrigin = sender.tab ? originOf(sender.url) : null;
+  const fromExtensionPage = sender.url?.startsWith(browser.runtime.getURL("")) ?? false;
   switch (msg.type) {
     case "CONFIG_GET":
       return loadConfig();
@@ -291,6 +301,42 @@ browser.runtime.onMessage.addListener((message: unknown) => {
       return autofillOtp((msg.payload as { key: string }).key);
     case "VAULT_TOUCH":
       return touchCachedVault().then(() => true);
+    case "GENERATE_PASSWORD": {
+      const p = msg.payload as { minLength?: number; maxLength?: number };
+      return isUnlocked().then((unlocked) =>
+        unlocked
+          ? { ok: true, password: generatePassword({ minLength: p.minLength, maxLength: p.maxLength }) }
+          : { ok: false },
+      );
+    }
+    case "GENERATED_PASSWORD_ACCEPT": {
+      if (!senderOrigin) return Promise.resolve({ ok: false });
+      const p = msg.payload as { username: string; password: string };
+      return isUnlocked().then(async (unlocked) => {
+        if (!unlocked || !p.password) return { ok: false };
+        await setPending(senderOrigin, p.username, p.password);
+        await touchCachedVault();
+        return { ok: true };
+      });
+    }
+    case "GENERATED_PASSWORD_SUBMIT": {
+      if (!senderOrigin) return Promise.resolve({ ok: false, error: "Not a web page." });
+      const p = msg.payload as { username: string; password: string };
+      return saveFromSubmit(senderOrigin, p.username, p.password).then((res) => {
+        if (!("skipped" in res)) notifySaveResult(sender.tab?.id, res);
+        return res;
+      });
+    }
+    // Popup-only: these name an origin explicitly, so refuse them from pages.
+    case "PENDING_CREDENTIALS_LIST":
+      if (!fromExtensionPage) return undefined;
+      return listPending();
+    case "PENDING_CREDENTIAL_SAVE":
+      if (!fromExtensionPage) return undefined;
+      return savePending((msg.payload as { origin: string }).origin);
+    case "PENDING_CREDENTIAL_DISCARD":
+      if (!fromExtensionPage) return undefined;
+      return discardPending((msg.payload as { origin: string }).origin).then(() => true);
     case "OPEN_POPUP":
       return browser.action.openPopup().then(() => true).catch(() => false);
     default:

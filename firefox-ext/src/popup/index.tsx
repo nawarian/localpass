@@ -11,6 +11,7 @@ import type { Entry, Vault } from "@localpass/core";
 import { generateTotp, normalizeOtpInput, type OtpCode } from "@localpass/core/dist/otp.js";
 import { loadStore } from "@localpass/core/dist/store.js";
 import { addEntry, deleteEntry, getEntry, listKeys } from "@localpass/core/dist/vault.js";
+import type { SaveCredentialResult } from "../shared/vault-store";
 import {
   allocCustomId,
   base64ToBytes,
@@ -37,6 +38,7 @@ import {
   send,
   STANDARD_KEYS,
   touchVault,
+  withVaultLock,
   type EditDraft,
   type UIState,
 } from "./lib";
@@ -116,6 +118,51 @@ function SyncBanner({ status }: { status: SyncStatus }) {
         <IconLoader class="w-3.5 h-3.5 flex-shrink-0 animate-spin" />
       )}
       {status.message}
+    </div>
+  );
+}
+
+// ---------- unsaved generated passwords ----------
+//
+// A password accepted from the in-page generator whose sign-up form was never
+// seen submitting (SPA quirks, navigation, a failed refresh). Offer to save or
+// discard it so it isn't silently lost.
+
+interface PendingSummary {
+  origin: string;
+  username: string;
+  createdAt: number;
+}
+
+function PendingBanner({
+  pending,
+  onSave,
+  onDiscard,
+}: {
+  pending: PendingSummary;
+  onSave: (origin: string) => void;
+  onDiscard: (origin: string) => void;
+}) {
+  const host = new URL(pending.origin).hostname;
+  return (
+    <div class="flex items-center gap-2 px-3 py-2 border-b border-amber-500/40 bg-amber-500/10 text-xs text-amber-200">
+      <IconKey class="w-4 h-4 flex-shrink-0" />
+      <span class="flex-1 min-w-0 truncate">
+        Unsaved generated password for <strong>{host}</strong>
+        {pending.username && <> ({pending.username})</>}
+      </span>
+      <button
+        class="px-2 py-1 rounded-md bg-accent text-white font-medium hover:opacity-90"
+        onClick={() => onSave(pending.origin)}
+      >
+        Save
+      </button>
+      <button
+        class="px-2 py-1 rounded-md text-amber-200 hover:bg-amber-500/20"
+        onClick={() => onDiscard(pending.origin)}
+      >
+        Discard
+      </button>
     </div>
   );
 }
@@ -884,6 +931,7 @@ function App() {
   const [lockedPassword, setLockedPassword] = useState("");
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
+  const [pending, setPending] = useState<PendingSummary[]>([]);
 
   // Gate first render until bootstrap has rehydrated the snapshot, so the
   // Locked/Unlocked components mount with restored state (their local useState
@@ -1005,6 +1053,48 @@ function App() {
     setUiState(await determineInitialState());
   }, []);
 
+  const refreshPending = useCallback(async () => {
+    setPending(await send<PendingSummary[]>("PENDING_CREDENTIALS_LIST").catch(() => []));
+  }, []);
+
+  useEffect(() => {
+    if (uiState === "unlocked") void refreshPending();
+    else setPending([]);
+  }, [uiState, refreshPending]);
+
+  const savePendingCredential = useCallback(
+    async (origin: string) => {
+      if (isSyncingRef.current) return;
+      isSyncingRef.current = true;
+      try {
+        showSync("working", "Saving generated password…");
+        await nextPaint();
+        // The background runs the same pull → persist → push pipeline (under
+        // the shared write lock); pick up the vault it cached afterwards.
+        const res = await send<SaveCredentialResult>("PENDING_CREDENTIAL_SAVE", { origin });
+        const cached = await loadCachedVault();
+        if (cached) setVault(cached.vault);
+        if (!res.ok) showSync("error", res.error);
+        else if (!res.synced) showSync("error", `Saved as "${res.key}", but ${res.error}`);
+        else showSync("success", `Saved as "${res.key}"`);
+      } finally {
+        isSyncingRef.current = false;
+        await refreshPending();
+      }
+    },
+    [showSync, refreshPending],
+  );
+
+  const discardPendingCredential = useCallback(
+    async (origin: string) => {
+      const host = new URL(origin).hostname;
+      if (!confirm(`Discard the generated password for ${host}? It hasn't been saved anywhere.`)) return;
+      await send("PENDING_CREDENTIAL_DISCARD", { origin });
+      await refreshPending();
+    },
+    [refreshPending],
+  );
+
   const selectKey = useCallback(
     (key: string) => {
       if (editDraft && !confirm("Discard unsaved changes?")) return;
@@ -1045,46 +1135,50 @@ function App() {
         }
       }
 
-      showSync("working", "Refreshing from S3…");
-      await nextPaint();
-      const refreshed = await pullAndDecrypt(primaryPassword);
-      if (!refreshed.ok) {
-        showSync("error", `Refresh failed: ${refreshed.error}`);
-        return;
-      }
-      const v = refreshed.vault;
+      // Hold the vault write lock across pull → merge → persist → push so a
+      // background sign-up save can't interleave and clobber this change.
+      await withVaultLock(async () => {
+        showSync("working", "Refreshing from S3…");
+        await nextPaint();
+        const refreshed = await pullAndDecrypt(primaryPassword);
+        if (!refreshed.ok) {
+          showSync("error", `Refresh failed: ${refreshed.error}`);
+          return;
+        }
+        const v = refreshed.vault;
 
-      if ((isNew || isRename) && v.entries[trimmedKey]) {
-        showSync("error", `Item "${trimmedKey}" already exists`);
-        return;
-      }
+        if ((isNew || isRename) && v.entries[trimmedKey]) {
+          showSync("error", `Item "${trimmedKey}" already exists`);
+          return;
+        }
 
-      const entry = draftToEntry({ ...editDraft, otp }, editDraft.createdAt);
-      if (isRename && editDraft.originalKey) {
-        deleteEntry(v, editDraft.originalKey);
-      }
-      addEntry(v, trimmedKey, entry);
-      setVault(v);
+        const entry = draftToEntry({ ...editDraft, otp }, editDraft.createdAt);
+        if (isRename && editDraft.originalKey) {
+          deleteEntry(v, editDraft.originalKey);
+        }
+        addEntry(v, trimmedKey, entry);
+        setVault(v);
 
-      showSync("working", "Encrypting vault…");
-      await nextPaint();
-      const persistRes = await persistVault(v, primaryPassword);
-      if (!persistRes.ok) {
-        showSync("error", persistRes.error);
-        return;
-      }
+        showSync("working", "Encrypting vault…");
+        await nextPaint();
+        const persistRes = await persistVault(v, primaryPassword);
+        if (!persistRes.ok) {
+          showSync("error", persistRes.error);
+          return;
+        }
 
-      setSelectedKey(trimmedKey);
-      setEditDraft(null);
+        setSelectedKey(trimmedKey);
+        setEditDraft(null);
 
-      showSync("working", "Syncing to S3…");
-      await nextPaint();
-      const pushRes = await pushToS3();
-      if (!pushRes.ok) {
-        showSync("error", `S3 sync failed: ${pushRes.error}`);
-        return;
-      }
-      showSync("success", "Saved & synced");
+        showSync("working", "Syncing to S3…");
+        await nextPaint();
+        const pushRes = await pushToS3();
+        if (!pushRes.ok) {
+          showSync("error", `S3 sync failed: ${pushRes.error}`);
+          return;
+        }
+        showSync("success", "Saved & synced");
+      });
     } finally {
       isSyncingRef.current = false;
     }
@@ -1098,44 +1192,48 @@ function App() {
 
     isSyncingRef.current = true;
     try {
-      showSync("working", "Refreshing from S3…");
-      await nextPaint();
-      const refreshed = await pullAndDecrypt(primaryPassword);
-      if (!refreshed.ok) {
-        showSync("error", `Refresh failed: ${refreshed.error}`);
-        return;
-      }
-      const v = refreshed.vault;
+      // Hold the vault write lock across pull → merge → persist → push so a
+      // background sign-up save can't interleave and clobber this change.
+      await withVaultLock(async () => {
+        showSync("working", "Refreshing from S3…");
+        await nextPaint();
+        const refreshed = await pullAndDecrypt(primaryPassword);
+        if (!refreshed.ok) {
+          showSync("error", `Refresh failed: ${refreshed.error}`);
+          return;
+        }
+        const v = refreshed.vault;
 
-      if (!v.entries[key]) {
+        if (!v.entries[key]) {
+          setVault(v);
+          setSelectedKey(null);
+          setEditDraft(null);
+          showSync("success", `"${key}" was already removed elsewhere`);
+          return;
+        }
+        deleteEntry(v, key);
         setVault(v);
+
+        showSync("working", "Encrypting vault…");
+        await nextPaint();
+        const persistRes = await persistVault(v, primaryPassword);
+        if (!persistRes.ok) {
+          showSync("error", persistRes.error);
+          return;
+        }
+
         setSelectedKey(null);
         setEditDraft(null);
-        showSync("success", `"${key}" was already removed elsewhere`);
-        return;
-      }
-      deleteEntry(v, key);
-      setVault(v);
 
-      showSync("working", "Encrypting vault…");
-      await nextPaint();
-      const persistRes = await persistVault(v, primaryPassword);
-      if (!persistRes.ok) {
-        showSync("error", persistRes.error);
-        return;
-      }
-
-      setSelectedKey(null);
-      setEditDraft(null);
-
-      showSync("working", "Syncing to S3…");
-      await nextPaint();
-      const pushRes = await pushToS3();
-      if (!pushRes.ok) {
-        showSync("error", `S3 sync failed: ${pushRes.error}`);
-        return;
-      }
-      showSync("success", "Deleted & synced");
+        showSync("working", "Syncing to S3…");
+        await nextPaint();
+        const pushRes = await pushToS3();
+        if (!pushRes.ok) {
+          showSync("error", `S3 sync failed: ${pushRes.error}`);
+          return;
+        }
+        showSync("success", "Deleted & synced");
+      });
     } finally {
       isSyncingRef.current = false;
     }
@@ -1192,6 +1290,15 @@ function App() {
 
   return (
     <>
+      {uiState === "unlocked" &&
+        pending.map((p) => (
+          <PendingBanner
+            key={p.origin}
+            pending={p}
+            onSave={savePendingCredential}
+            onDiscard={discardPendingCredential}
+          />
+        ))}
       {content}
       {syncStatus && <SyncBanner status={syncStatus} />}
     </>

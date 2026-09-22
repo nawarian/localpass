@@ -9,6 +9,7 @@
     ".": "./dist/index.js",
     "./config": "./dist/config.js",
     "./crypto": "./dist/crypto.js",
+    "./generator": "./dist/generator.js",
     "./otp": "./dist/otp.js",
     "./s3": "./dist/s3.js",
     "./store": "./dist/store.js",
@@ -24,10 +25,12 @@
     "dist"
   ],
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.800.0",
     "@noble/hashes": "^1.7.1"
   },
   "devDependencies": {
+    "@aws-crypto/sha256-js": "^5.2.0",
+    "@aws-sdk/client-s3": "^3.1137.0",
+    "@smithy/signature-v4": "^5.7.3",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
   }
