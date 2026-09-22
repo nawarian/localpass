@@ -6,7 +6,9 @@
  * fills the username + password fields and dispatches input/change events
  * so frameworks (React, Vue, etc.) see the value. One-time-code inputs get
  * the same overlay, listing only entries with a TOTP secret; picking one fills
- * the code that is valid at click time.
+ * the code that is valid at click time. Password inputs on sign-up forms get a
+ * "Use generated password" section; when the form is submitted, the background
+ * saves the credential to the vault and syncs it.
  *
  * Detection (field matching, MutationObserver, focusin fallback, fill) is all
  * vanilla. Only the shadow-DOM indicator + dropdown UI is rendered with Preact
@@ -15,6 +17,7 @@
  */
 
 import { render } from "preact";
+import { useEffect, useState } from "preact/hooks";
 import { Logo } from "../popup/icons";
 
 type AutofillEntry = { key: string; username: string; hasOtp: boolean };
@@ -229,6 +232,105 @@ function findPasswordInputFor(usernameInput: HTMLInputElement): HTMLInputElement
   return null;
 }
 
+// ---------- sign-up detection ----------
+
+const SIGNUP_RE = /\b(sign ?up|register|registration|create (an |your |new )?account|join|enroll|new password)\b/;
+const LOGIN_RE = /\b(sign ?in|log ?in|logon)\b/;
+
+/** Lowercased words from attribute/text snippets: `signUpForm` / `sign_up` → `sign up form`. */
+function normalizeWords(...parts: (string | null | undefined)[]): string {
+  return parts
+    .map((p) => p || "")
+    .join(" ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[_\-/.]+/g, " ")
+    .toLowerCase();
+}
+
+function passwordInputsIn(scope: ParentNode): HTMLInputElement[] {
+  return Array.from(scope.querySelectorAll<HTMLInputElement>("input")).filter(isPasswordInput);
+}
+
+function isSubmitControl(el: Element): boolean {
+  if (el instanceof HTMLButtonElement) return el.type === "submit";
+  if (el instanceof HTMLInputElement) return el.type === "submit" || el.type === "image";
+  return false;
+}
+
+function controlText(el: Element): string {
+  return normalizeWords(
+    el.textContent,
+    el instanceof HTMLInputElement ? el.value : "",
+    el.getAttribute("aria-label"),
+    el.id,
+    el.getAttribute("name"),
+  );
+}
+
+/**
+ * Heuristic: does this password input take a *new* password (sign-up, or the
+ * new/confirm pair on a change-password form)?
+ *   - autocomplete=new-password wins; autocomplete=current-password loses;
+ *   - two password inputs in the form → password + confirm;
+ *   - three → current, new, confirm: everything but the first;
+ *   - otherwise sign-up keywords on the field, the form, or its submit button,
+ *     unless that button reads like a login.
+ */
+function isNewPasswordInput(node: Element | null): node is HTMLInputElement {
+  if (!isPasswordInput(node)) return false;
+  const ac = autocompleteTokens(node);
+  if (ac.includes("new-password")) return true;
+  if (ac.includes("current-password")) return false;
+
+  const form = node.form;
+  const all = passwordInputsIn(form ?? document);
+  if (all.length >= 3) return all.indexOf(node) > 0;
+  if (all.length === 2) return true;
+
+  const submit = form
+    ? Array.from(form.querySelectorAll("button, input[type=submit], input[type=image]")).find(isSubmitControl)
+    : undefined;
+  const submitText = submit ? controlText(submit) : "";
+  if (LOGIN_RE.test(submitText) && !SIGNUP_RE.test(submitText)) return false;
+
+  const context = normalizeWords(
+    node.name,
+    node.id,
+    node.getAttribute("aria-label"),
+    node.placeholder,
+    form?.id,
+    form?.getAttribute("name"),
+    form?.getAttribute("action"),
+    form?.getAttribute("aria-label"),
+  );
+  return SIGNUP_RE.test(context) || SIGNUP_RE.test(submitText);
+}
+
+/**
+ * The inputs a generated password goes into: the focused field plus the other
+ * new-password fields of its form (the confirm field), never a
+ * current-password field.
+ */
+function newPasswordInputsFor(anchor: HTMLInputElement): HTMLInputElement[] {
+  const others = passwordInputsIn(anchor.form ?? document).filter(
+    (el) => el !== anchor && isNewPasswordInput(el),
+  );
+  return [anchor, ...others];
+}
+
+/** Best guess at the username/email field of a sign-up form. */
+function findSignupUsernameInput(passwordInput: HTMLInputElement): HTMLInputElement | null {
+  const inputs = Array.from((passwordInput.form ?? document).querySelectorAll<HTMLInputElement>("input")).filter(
+    (el) => isCandidateInput(el) && el.type !== "password",
+  );
+  return (
+    inputs.find((el) => autocompleteTokens(el).includes("username")) ??
+    inputs.find((el) => autocompleteTokens(el).includes("email") || el.type === "email") ??
+    inputs.find((el) => isUsernameLikeInput(el)) ??
+    findUsernameInput(passwordInput)
+  );
+}
+
 // ---------- shadow-DOM UI (Preact) ----------
 
 const INDICATOR_CSS = `
@@ -344,6 +446,59 @@ const DROPDOWN_CSS = `
     margin: 6px 10px 10px;
   }
   .action:hover { background: #5b5fe0; }
+  .gen {
+    margin: 4px 4px 6px;
+    padding: 10px;
+    border: 1px solid #2e2e33;
+    border-radius: 8px;
+    background: #202023;
+  }
+  .gen-title { font-weight: 500; margin-bottom: 6px; }
+  .gen-row { display: flex; align-items: center; gap: 6px; }
+  .gen-pw {
+    flex: 1;
+    min-width: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: #c7d2fe;
+    background: #1a1a1c;
+    border: 1px solid #2e2e33;
+    border-radius: 6px;
+    padding: 6px 8px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .icon-btn {
+    background: transparent;
+    border: 1px solid #2e2e33;
+    color: #9b9ba1;
+    border-radius: 6px;
+    padding: 5px 7px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 11px;
+  }
+  .icon-btn:hover { color: #e8e8ea; background: #2c2c30; }
+  .gen .action { width: 100%; margin: 8px 0 0; }
+`;
+
+const TOAST_CSS = `
+  :host { all: initial; }
+  .toast {
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 13px;
+    color: #e8e8ea;
+    background: #1a1a1c;
+    border: 1px solid #2e2e33;
+    border-left: 3px solid #10b981;
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    padding: 10px 14px;
+    max-width: 340px;
+  }
+  .toast.error { border-left-color: #f43f5e; }
+  .toast .brand { color: #f4ecdc; font-weight: 600; margin-right: 6px; }
 `;
 
 function Indicator({ onActivate }: { onActivate: () => void }) {
@@ -424,16 +579,100 @@ function OpenPopupButton({ label, onOpen }: { label: string; onOpen: () => void 
   );
 }
 
+/**
+ * "Use generated password" section for sign-up fields. The password comes from
+ * the background (one generator for every surface) and is sized to the field's
+ * minlength/maxlength. Nothing is recorded until the user clicks "Use".
+ */
+function GeneratorSection({
+  field,
+  onUse,
+}: {
+  field: HTMLInputElement;
+  onUse: (password: string) => void;
+}) {
+  const [password, setPassword] = useState<string | null>(null);
+  const [reveal, setReveal] = useState(false);
+
+  const generate = () => {
+    setPassword(null);
+    sendMessage<{ ok: false } | { ok: true; password: string }>("GENERATE_PASSWORD", {
+      minLength: field.minLength,
+      maxLength: field.maxLength,
+    })
+      .then((r) => setPassword(r.ok ? r.password : null))
+      .catch(() => {});
+  };
+  useEffect(generate, [field]);
+
+  const stop = (e: Event) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  return (
+    <div class="gen">
+      <div class="gen-title">Suggested strong password</div>
+      <div class="gen-row">
+        <div class="gen-pw">
+          {password === null ? "…" : reveal ? password : "•".repeat(Math.min(password.length, 24))}
+        </div>
+        <button
+          class="icon-btn"
+          type="button"
+          title={reveal ? "Hide" : "Show"}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={(e) => {
+            stop(e);
+            setReveal(!reveal);
+          }}
+        >
+          {reveal ? "Hide" : "Show"}
+        </button>
+        <button
+          class="icon-btn"
+          type="button"
+          title="Generate another"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={(e) => {
+            stop(e);
+            generate();
+          }}
+        >
+          ↻
+        </button>
+      </div>
+      <button
+        class="action"
+        type="button"
+        disabled={password === null}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={(e) => {
+          stop(e);
+          if (password) onUse(password);
+        }}
+      >
+        Use generated password
+      </button>
+    </div>
+  );
+}
+
 function DropdownPanel({
   result,
   otpMode,
+  signupField,
   onPick,
   onOpenPopup,
+  onUseGenerated,
 }: {
   result: QueryResult;
   otpMode: boolean;
+  /** Set when the field takes a new password: show the generator. */
+  signupField: HTMLInputElement | null;
   onPick: (key: string) => void;
   onOpenPopup: () => void;
+  onUseGenerated: (password: string) => void;
 }) {
   let body;
   if (result.state === "no_vault") {
@@ -447,6 +686,17 @@ function DropdownPanel({
         <OpenPopupButton label="Open LocalPass" onOpen={onOpenPopup} />
       </>
     );
+  } else if (result.state === "locked" && signupField) {
+    body = (
+      <>
+        <div class="empty">
+          <strong style="color:#e8e8ea">Vault is locked</strong>
+          <br />
+          Unlock LocalPass to use a generated password.
+        </div>
+        <OpenPopupButton label="Unlock LocalPass" onOpen={onOpenPopup} />
+      </>
+    );
   } else if (result.state === "locked") {
     body = (
       <>
@@ -456,6 +706,22 @@ function DropdownPanel({
           Click below to unlock and autofill.
         </div>
         <OpenPopupButton label="Unlock LocalPass" onOpen={onOpenPopup} />
+      </>
+    );
+  } else if (signupField) {
+    // On a sign-up form an unrelated entry is rarely wanted; keep this site's
+    // entries (the user may be changing a password) below the generator.
+    body = (
+      <>
+        <GeneratorSection field={signupField} onUse={onUseGenerated} />
+        {result.matches.length > 0 && (
+          <>
+            <div class="group-label">Saved for this site</div>
+            {result.matches.map((e) => (
+              <Item key={e.key} entry={e} otpMode={false} onPick={onPick} />
+            ))}
+          </>
+        )}
       </>
     );
   } else {
@@ -496,6 +762,7 @@ function DropdownPanel({
           <Logo small class="mark" />
           <span class="brand">LocalPass</span>
           {otpMode && <span>One-time code</span>}
+          {signupField && <span>New password</span>}
         </div>
         <div class="list">{body}</div>
       </div>
@@ -594,16 +861,22 @@ function showDropdown(input: HTMLInputElement, result: QueryResult) {
   const host = positionDropdownHost(input);
   const shadow = host.attachShadow({ mode: "closed" });
   const otpMode = isOtpInput(input);
+  const signupField = isNewPasswordInput(input) ? input : null;
   render(
     <DropdownPanel
       result={result}
       otpMode={otpMode}
+      signupField={signupField}
       onPick={(key) => {
         void (otpMode ? fillOtp(key) : fillEntry(key));
         clearDropdown();
       }}
       onOpenPopup={() => {
         void sendMessage("OPEN_POPUP", {});
+        clearDropdown();
+      }}
+      onUseGenerated={(password) => {
+        void fillGenerated(input, password);
         clearDropdown();
       }}
     />,
@@ -662,6 +935,99 @@ async function fillOtp(key: string) {
   if (!field) return;
   const res = await sendMessage<{ ok: false } | { ok: true; code: string }>("AUTOFILL_OTP", { key });
   if (res.ok) setNativeValue(field, res.code);
+}
+
+/**
+ * Fill a generated password into the sign-up field and its confirm field,
+ * record it as pending in the background, and watch the form for submit.
+ */
+async function fillGenerated(field: HTMLInputElement, password: string) {
+  for (const f of newPasswordInputsFor(field)) setNativeValue(f, password);
+  const username = findSignupUsernameInput(field)?.value.trim() ?? "";
+  const res = await sendMessage<{ ok: boolean }>("GENERATED_PASSWORD_ACCEPT", { username, password });
+  if (res.ok) watchSignupSubmit(field);
+}
+
+// ---------- save on submit ----------
+
+let stopSignupWatch: (() => void) | null = null;
+
+/**
+ * Commit the pending generated password once the sign-up form is submitted.
+ * Covers the form's `submit` event (fires after HTML validation passes, and for
+ * Enter-to-submit), and — for sites that submit from script — clicks on a
+ * sign-up-looking button that isn't a native submit control, or Enter in a
+ * field when there's no <form>. All listeners are capture-phase on the
+ * document so page handlers can't swallow them; the first one wins.
+ */
+function watchSignupSubmit(field: HTMLInputElement) {
+  stopSignupWatch?.();
+  const form = field.form;
+
+  const inScope = (el: Element) => (form ? form.contains(el) : true);
+
+  const onSubmit = (e: Event) => {
+    if (!form || e.target === form) commit();
+  };
+  const onClick = (e: MouseEvent) => {
+    const target = e.composedPath()[0];
+    if (!(target instanceof Element)) return;
+    const el = target.closest("button, input[type=submit], input[type=image], input[type=button], [role=button], a");
+    if (!el || !inScope(el)) return;
+    // Native submit controls in a form are covered by the submit event.
+    if (form && isSubmitControl(el)) return;
+    if (SIGNUP_RE.test(controlText(el))) commit();
+  };
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (form || e.key !== "Enter") return;
+    const t = e.target;
+    if (t instanceof HTMLInputElement && (t.type === "password" || t === findSignupUsernameInput(field))) {
+      commit();
+    }
+  };
+
+  const stop = () => {
+    document.removeEventListener("submit", onSubmit, true);
+    document.removeEventListener("click", onClick, true);
+    document.removeEventListener("keydown", onKeyDown, true);
+    stopSignupWatch = null;
+  };
+  // Read the values at submit time: the user may have tweaked the password.
+  const commit = () => {
+    stop();
+    const username = findSignupUsernameInput(field)?.value.trim() ?? "";
+    void sendMessage("GENERATED_PASSWORD_SUBMIT", { username, password: field.value }).catch(() => {});
+  };
+
+  document.addEventListener("submit", onSubmit, true);
+  document.addEventListener("click", onClick, true);
+  document.addEventListener("keydown", onKeyDown, true);
+  stopSignupWatch = stop;
+}
+
+// ---------- toast ----------
+
+function showToast(kind: "success" | "error", text: string) {
+  const host = document.createElement("localpass-toast");
+  host.style.cssText = `
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    z-index: ${Z_BASE + 2};
+  `;
+  const shadow = host.attachShadow({ mode: "closed" });
+  render(
+    <>
+      <style>{TOAST_CSS}</style>
+      <div class={`toast ${kind === "error" ? "error" : ""}`} role="status">
+        <span class="brand">LocalPass</span>
+        {text}
+      </div>
+    </>,
+    shadow,
+  );
+  document.documentElement.appendChild(host);
+  setTimeout(() => host.remove(), kind === "error" ? 6000 : 3500);
 }
 
 function setNativeValue(input: HTMLInputElement, value: string) {
@@ -760,7 +1126,11 @@ refreshCache().catch(() => {});
 // or auto-lock expiry). Refresh our local cache, and if a dropdown is open,
 // re-render it with the fresh data.
 browser.runtime.onMessage.addListener((message: unknown) => {
-  const msg = message as { type?: string };
+  const msg = message as { type?: string; kind?: "success" | "error"; text?: string };
+  if (msg?.type === "LOCALPASS_TOAST" && msg.text) {
+    showToast(msg.kind ?? "success", msg.text);
+    return;
+  }
   if (msg?.type === "VAULT_STATE_PUSH") {
     refreshCache()
       .then((result) => {
