@@ -1,6 +1,6 @@
 {
   "name": "localpass-firefox",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "LocalPass Firefox Extension – local-first password management",
   "type": "module",
   "source": "manifest.json",
