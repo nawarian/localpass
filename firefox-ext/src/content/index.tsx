@@ -112,6 +112,23 @@ function autocompleteTokens(node: HTMLInputElement): string[] {
 }
 
 /**
+ * Visible label text for the input: associated <label>s plus the elements
+ * named by aria-labelledby. Frameworks like AWS's awsui leave name/placeholder
+ * empty and describe the field only through `<label for>`. Capped so a label
+ * wrapping a whole form section can't drag in unrelated keywords.
+ */
+function labelText(node: HTMLInputElement): string {
+  const parts: string[] = [];
+  node.labels?.forEach((l) => parts.push(l.textContent || ""));
+  for (const id of (node.getAttribute("aria-labelledby") || "").split(/\s+/).filter(Boolean)) {
+    parts.push(document.getElementById(id)?.textContent || "");
+  }
+  return parts
+    .map((p) => p.replace(/\s+/g, " ").trim().slice(0, 80))
+    .join(" ");
+}
+
+/**
  * Heuristic: is this a one-time-code (2FA) input? `autocomplete=one-time-code`
  * or an explicit otp/2fa/mfa keyword is enough; a bare "code" keyword also
  * needs a numeric hint (inputmode/type) or a 6–8 char maxlength, so promo and
@@ -128,6 +145,7 @@ function isOtpInput(node: Element | null): boolean {
     node.id || "",
     node.getAttribute("aria-label") || "",
     node.placeholder || "",
+    labelText(node),
   ]
     .join(" ")
     .replace(/([a-z])([A-Z])/g, "$1 $2") // totpCode → totp Code
@@ -167,6 +185,7 @@ function isUsernameLikeInput(node: Element | null): node is HTMLInputElement {
     node.getAttribute("aria-label") || "",
     node.getAttribute("aria-labelledby") || "",
     node.placeholder || "",
+    labelText(node),
   ]
     .join(" ")
     .toLowerCase();
