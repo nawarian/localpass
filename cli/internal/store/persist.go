@@ -36,11 +36,13 @@ func LoadStore(path string, primaryPassword string) (*Vault, error) {
 }
 
 // SaveStore serializes, encrypts, and atomically writes the vault to the given file path.
-// It refuses (with *VersionError) a vault newer than SupportedVersion.
+// It refuses (with *VersionError) a vault newer than SupportedVersion, and
+// gives entries without an ID one (in place, see EnsureIDs).
 func SaveStore(path string, vault *Vault, primaryPassword string) error {
 	if vault.Version > SupportedVersion {
 		return &VersionError{Version: vault.Version}
 	}
+	vault.EnsureIDs()
 
 	// Marshal to JSON
 	data, err := json.Marshal(vault)

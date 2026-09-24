@@ -3,6 +3,12 @@
  */
 
 export interface Entry {
+  /**
+   * Identifies the entry independently of its name (the map key), so it
+   * survives renames. Assigned on save by ensureIds; optional because vaults
+   * saved by older clients don't have it.
+   */
+  id?: string;
   metadata: Record<string, string>;
   created_at: string; // ISO 8601
   updated_at: string; // ISO 8601
@@ -24,6 +30,8 @@ export interface Vault {
  */
 export const SUPPORTED_VAULT_VERSION = 1;
 
+// Rebuilt from the edit form on every save. Everything else, `id` included,
+// belongs to the entry itself and carries over.
 const ENTRY_FIELDS = new Set(["metadata", "created_at", "updated_at"]);
 
 /**
@@ -98,3 +106,22 @@ export const STANDARD_FIELDS = new Set([
   "notes",
   "otp",
 ]);
+
+/**
+ * Give every entry a stable unique ID, in place: entries without one (new, or
+ * last saved by a client that predates IDs) get a fresh one, and if two
+ * entries share an ID, all but the first by name get a fresh one. Existing
+ * unique IDs never change, so an entry keeps its ID across renames.
+ */
+export function ensureIds(vault: Vault): void {
+  const seen = new Set<string>();
+  for (const key of Object.keys(vault.entries).sort()) {
+    const entry = vault.entries[key];
+    if (typeof entry.id === "string" && entry.id && !seen.has(entry.id)) {
+      seen.add(entry.id);
+      continue;
+    }
+    entry.id = crypto.randomUUID();
+    seen.add(entry.id);
+  }
+}

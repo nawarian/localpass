@@ -6,6 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { Entry, Vault } from "@localpass/core";
+import { ensureIds } from "@localpass/core/dist/vault.js";
 import {
   applyDraft,
   draftToEntry,
@@ -171,5 +172,21 @@ describe("fields from newer clients", () => {
     save(v, { ...newDraft(), key: "other", password: "x" });
     expect(v.entries["AWS"].id).toBeUndefined();
     expect(v.entries["other"].id).toBeUndefined();
+  });
+});
+
+describe("entry ids", () => {
+  it("a rename keeps the entry's id; a duplicate gets its own on save", () => {
+    const v = vaultWithSso();
+    ensureIds(v);
+    const ssoId = v.entries["AWS SSO"].id;
+
+    save(v, { ...duplicateDraft("AWS SSO", v.entries["AWS SSO"], v.entries), key: "AWS", otp: AWS_OTP });
+    save(v, { ...entryToDraft("AWS SSO", v.entries["AWS SSO"]), key: "AWS Identity Center" });
+    ensureIds(v); // what saveStore does before encrypting
+
+    expect(v.entries["AWS Identity Center"].id).toBe(ssoId);
+    expect(v.entries["AWS"].id).toBeTruthy();
+    expect(v.entries["AWS"].id).not.toBe(ssoId);
   });
 });
