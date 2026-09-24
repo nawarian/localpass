@@ -6,7 +6,18 @@
 
 import { decrypt, encrypt } from "./crypto.js";
 import type { Vault } from "./vault.js";
-import { newVault } from "./vault.js";
+import { SUPPORTED_VAULT_VERSION, newVault } from "./vault.js";
+
+/** Saving a vault newer than SUPPORTED_VAULT_VERSION was refused. */
+export class VaultVersionError extends Error {
+  constructor(public readonly version: number) {
+    super(
+      `This vault was saved by a newer LocalPass (format v${version}; this version supports v${SUPPORTED_VAULT_VERSION}). ` +
+        "Update LocalPass to make changes.",
+    );
+    this.name = "VaultVersionError";
+  }
+}
 
 /**
  * Decrypt and parse a vault from raw encrypted bytes.
@@ -32,12 +43,14 @@ export async function loadStore(
 }
 
 /**
- * Serialize, encrypt, and return a vault as encrypted bytes.
+ * Serialize, encrypt, and return a vault as encrypted bytes. Throws
+ * VaultVersionError for a vault newer than SUPPORTED_VAULT_VERSION.
  */
 export async function saveStore(
   vault: Vault,
   primaryPassword: string
 ): Promise<Uint8Array> {
+  if (vault.version > SUPPORTED_VAULT_VERSION) throw new VaultVersionError(vault.version);
   const json = JSON.stringify(vault);
   const plaintext = new TextEncoder().encode(json);
   return await encrypt(plaintext, primaryPassword);

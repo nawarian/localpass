@@ -1,15 +1,19 @@
 package store
 
 import (
+	"encoding/json"
 	"sort"
 	"strings"
 	"time"
 )
 
 // Vault is the top-level container for password entries.
+// It's (un)marshaled by the methods in compat.go.
 type Vault struct {
-	Version int               `json:"version"`
-	Entries map[string]Entry  `json:"entries"`
+	Version int
+	Entries map[string]Entry
+	// Extra holds top-level fields written by newer clients, kept verbatim.
+	Extra map[string]json.RawMessage
 }
 
 // Entry represents a single password entry.
@@ -19,10 +23,14 @@ type Vault struct {
 //   "username"  - the username
 //   "notes"     - free-form notes/description
 // Any other keys are treated as custom metadata (e.g. "OTP Secret", "recovery_code").
+// It's (un)marshaled by the methods in compat.go.
 type Entry struct {
-	Metadata  map[string]string `json:"metadata"`
-	CreatedAt time.Time         `json:"created_at"`
-	UpdatedAt time.Time         `json:"updated_at"`
+	Metadata  map[string]string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	// Extra holds fields written by newer clients, kept verbatim so that
+	// editing the entry here never drops them.
+	Extra map[string]json.RawMessage
 }
 
 // NewVault creates a new empty vault with Version set to 1.

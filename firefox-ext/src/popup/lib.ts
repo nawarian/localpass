@@ -9,7 +9,7 @@
  */
 
 import type { Config, Entry, Vault } from "@localpass/core";
-import { addEntry, deleteEntry } from "@localpass/core/dist/vault.js";
+import { addEntry, deleteEntry, withPreservedFields } from "@localpass/core/dist/vault.js";
 import { SESSION_VAULT_KEY, clearPendingCredentials, type CachedVault } from "../shared/vault-store";
 
 export {
@@ -290,14 +290,16 @@ export function renameConfirmMessage(draft: EditDraft): string {
 
 /**
  * Apply a saved draft to the (freshly pulled) vault as `entry`. Returns an
- * error message when the target name is already taken, otherwise null.
+ * error message when the target name is already taken, otherwise null. An
+ * update or rename keeps the fields a newer client stored on the entry.
  */
 export function applyDraft(vault: Vault, draft: EditDraft, entry: Entry): string | null {
   const key = draft.key.trim();
   const kind = saveKind(draft);
   if (kind !== "update" && vault.entries[key]) return `Item "${key}" already exists`;
+  const prev = draft.originalKey !== null ? vault.entries[draft.originalKey] : undefined;
   if (kind === "rename" && draft.originalKey !== null) deleteEntry(vault, draft.originalKey);
-  addEntry(vault, key, entry);
+  addEntry(vault, key, withPreservedFields(prev, entry));
   return null;
 }
 
