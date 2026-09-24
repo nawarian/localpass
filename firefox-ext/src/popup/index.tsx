@@ -10,16 +10,18 @@ import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import type { Entry, Vault } from "@localpass/core";
 import { generateTotp, normalizeOtpInput, type OtpCode } from "@localpass/core/dist/otp.js";
 import { loadStore } from "@localpass/core/dist/store.js";
-import { addEntry, deleteEntry, getEntry, listKeys } from "@localpass/core/dist/vault.js";
+import { deleteEntry, getEntry, listKeys } from "@localpass/core/dist/vault.js";
 import type { SaveCredentialResult } from "../shared/vault-store";
 import {
   allocCustomId,
+  applyDraft,
   base64ToBytes,
   clearCachedVault,
   clearPopupUI,
   colorFor,
   determineInitialState,
   draftToEntry,
+  duplicateDraft,
   ensureHttp,
   ensureNextCustomId,
   entryToDraft,
@@ -33,8 +35,10 @@ import {
   pullAndDecrypt,
   pullFromS3,
   pushToS3,
+  renameConfirmMessage,
   savePopupUI,
   saveCachedVault,
+  saveKind,
   send,
   STANDARD_KEYS,
   touchVault,
@@ -47,6 +51,7 @@ import {
   IconCheck,
   IconCloud,
   IconCopy,
+  IconDuplicate,
   IconEye,
   IconGear,
   IconKey,
@@ -540,10 +545,12 @@ function DetailPane({
   vault,
   selectedKey,
   onEdit,
+  onDuplicate,
 }: {
   vault: Vault;
   selectedKey: string | null;
   onEdit: () => void;
+  onDuplicate: () => void;
 }) {
   const entry: Entry | undefined = selectedKey ? getEntry(vault, selectedKey) : undefined;
 
@@ -586,6 +593,13 @@ function DetailPane({
         </span>
         <button
           class="ml-auto text-text-muted hover:text-text p-1.5 rounded-md hover:bg-surface-2"
+          title="Duplicate item"
+          onClick={onDuplicate}
+        >
+          <IconDuplicate class="w-4 h-4" />
+        </button>
+        <button
+          class="text-text-muted hover:text-text p-1.5 rounded-md hover:bg-surface-2"
           title="Edit item"
           onClick={onEdit}
         >
@@ -821,6 +835,7 @@ function Unlocked({
   onSelect,
   onNew,
   onEdit,
+  onDuplicate,
   onDraftChange,
   onCancelEdit,
   onSave,
@@ -835,6 +850,7 @@ function Unlocked({
   onSelect: (key: string) => void;
   onNew: () => void;
   onEdit: () => void;
+  onDuplicate: () => void;
   onDraftChange: (next: EditDraft) => void;
   onCancelEdit: () => void;
   onSave: () => void;
@@ -912,7 +928,7 @@ function Unlocked({
             onDelete={onDelete}
           />
         ) : (
-          <DetailPane vault={vault} selectedKey={selectedKey} onEdit={onEdit} />
+          <DetailPane vault={vault} selectedKey={selectedKey} onEdit={onEdit} onDuplicate={onDuplicate} />
         )}
       </div>
     </div>
@@ -1118,8 +1134,9 @@ function App() {
       flashToast("Name is required", true);
       return;
     }
-    const isRename = editDraft.originalKey !== null && editDraft.originalKey !== trimmedKey;
-    const isNew = editDraft.originalKey === null;
+    // A rename removes the entry under its old name; people reach for "edit
+    // and change the name" to make a second, similar entry, so ask first.
+    if (saveKind(editDraft) === "rename" && !confirm(renameConfirmMessage(editDraft))) return;
 
     isSyncingRef.current = true;
     try {
@@ -1147,16 +1164,12 @@ function App() {
         }
         const v = refreshed.vault;
 
-        if ((isNew || isRename) && v.entries[trimmedKey]) {
-          showSync("error", `Item "${trimmedKey}" already exists`);
+        const entry = draftToEntry({ ...editDraft, otp }, editDraft.createdAt);
+        const conflict = applyDraft(v, editDraft, entry);
+        if (conflict) {
+          showSync("error", conflict);
           return;
         }
-
-        const entry = draftToEntry({ ...editDraft, otp }, editDraft.createdAt);
-        if (isRename && editDraft.originalKey) {
-          deleteEntry(v, editDraft.originalKey);
-        }
-        addEntry(v, trimmedKey, entry);
         setVault(v);
 
         showSync("working", "Encrypting vault…");
@@ -1246,6 +1259,13 @@ function App() {
     setEditDraft(entryToDraft(selectedKey, e));
   }, [vault, selectedKey]);
 
+  const startDuplicate = useCallback(() => {
+    if (!vault || !selectedKey) return;
+    const e = getEntry(vault, selectedKey);
+    if (!e) return;
+    setEditDraft(duplicateDraft(selectedKey, e, vault.entries));
+  }, [vault, selectedKey]);
+
   let content;
   if (bootError) {
     content = <div class="p-6 text-sm text-red-400">Error: {bootError}</div>;
@@ -1280,6 +1300,7 @@ function App() {
           setEditDraft(newDraft());
         }}
         onEdit={startEdit}
+        onDuplicate={startDuplicate}
         onDraftChange={setEditDraft}
         onCancelEdit={() => setEditDraft(null)}
         onSave={saveDraft}

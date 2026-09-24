@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "parcel watch manifest.json",
     "build": "parcel build manifest.json && npm run postbuild:firefox",
+    "test": "vitest run",
     "postbuild:firefox": "jq 'del(.background.service_worker)' dist/manifest.json > dist/manifest.json.tmp && mv dist/manifest.json.tmp dist/manifest.json",
     "package": "npm run build && npx web-ext build --source-dir=dist --overwrite-dest",
     "lint": "npm run build && npx web-ext lint --source-dir=dist"
@@ -25,6 +26,7 @@
     "process": "^0.11.10",
     "tailwindcss": "^4.2.4",
     "typescript": "^5.7.0",
+    "vitest": "^3.2.7",
     "web-ext": "^8.5.0"
   }
 }
