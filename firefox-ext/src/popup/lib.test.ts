@@ -145,3 +145,31 @@ describe("the reported scenario", () => {
     expect(v).toEqual(before);
   });
 });
+
+describe("fields from newer clients", () => {
+  const withExtras = (): Vault => ({
+    version: 1,
+    entries: { "AWS SSO": { ...structuredClone(SSO), id: "sso-id", tags: ["work"] } },
+  });
+
+  it("an update keeps them", () => {
+    const v = withExtras();
+    save(v, { ...entryToDraft("AWS SSO", v.entries["AWS SSO"]), notes: "n" });
+    expect(v.entries["AWS SSO"]).toMatchObject({ id: "sso-id", tags: ["work"] });
+    expect(v.entries["AWS SSO"].metadata.notes).toBe("n");
+  });
+
+  it("a rename moves them with the entry", () => {
+    const v = withExtras();
+    save(v, { ...entryToDraft("AWS SSO", v.entries["AWS SSO"]), key: "AWS Identity Center" });
+    expect(v.entries["AWS Identity Center"]).toMatchObject({ id: "sso-id", tags: ["work"] });
+  });
+
+  it("a duplicate or new item doesn't copy them (it's a different entry)", () => {
+    const v = withExtras();
+    save(v, { ...duplicateDraft("AWS SSO", v.entries["AWS SSO"], v.entries), key: "AWS" });
+    save(v, { ...newDraft(), key: "other", password: "x" });
+    expect(v.entries["AWS"].id).toBeUndefined();
+    expect(v.entries["other"].id).toBeUndefined();
+  });
+});

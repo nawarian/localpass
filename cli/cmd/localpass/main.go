@@ -390,6 +390,8 @@ func runSet(args []string) {
 
 	if exists {
 		entry.CreatedAt = existingEntry.CreatedAt
+		// Keep fields a newer client stored on this entry.
+		entry.Extra = existingEntry.Extra
 		// Carry over any existing metadata keys not being overwritten
 		if entry.Metadata == nil {
 			entry.Metadata = make(map[string]string)

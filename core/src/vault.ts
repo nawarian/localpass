@@ -6,11 +6,38 @@ export interface Entry {
   metadata: Record<string, string>;
   created_at: string; // ISO 8601
   updated_at: string; // ISO 8601
+  /** Fields written by newer clients; kept verbatim (see withPreservedFields). */
+  [field: string]: unknown;
 }
 
 export interface Vault {
   version: number;
   entries: Record<string, Entry>;
+  /** Fields written by newer clients; JSON round trips keep them. */
+  [field: string]: unknown;
+}
+
+/**
+ * The newest vault format this build can write. A vault with a higher
+ * `version` was written by a newer LocalPass: it can still be read, but
+ * saving it is refused so this build can't damage it.
+ */
+export const SUPPORTED_VAULT_VERSION = 1;
+
+const ENTRY_FIELDS = new Set(["metadata", "created_at", "updated_at"]);
+
+/**
+ * `next` plus every field of `prev` beyond metadata and timestamps — fields
+ * a newer client stored on the entry. Use it whenever an edited entry is
+ * rebuilt from scratch, so the edit doesn't drop them.
+ */
+export function withPreservedFields(prev: Entry | undefined, next: Entry): Entry {
+  if (!prev) return next;
+  const kept: Record<string, unknown> = {};
+  for (const [field, value] of Object.entries(prev)) {
+    if (!ENTRY_FIELDS.has(field)) kept[field] = value;
+  }
+  return { ...kept, ...next };
 }
 
 /**
