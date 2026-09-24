@@ -64,6 +64,15 @@ export const IconCopy = ({ class: cls }: { class: string }) => (
   </Svg>
 );
 
+export const IconDuplicate = ({ class: cls }: { class: string }) => (
+  <Svg class={cls}>
+    <rect x="9" y="9" width="13" height="13" rx="2" />
+    <path d="M5 15V5a2 2 0 0 1 2-2h10" />
+    <line x1="15.5" y1="12.5" x2="15.5" y2="18.5" />
+    <line x1="12.5" y1="15.5" x2="18.5" y2="15.5" />
+  </Svg>
+);
+
 export const IconEye = ({ class: cls }: { class: string }) => (
   <Svg class={cls}>
     <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />

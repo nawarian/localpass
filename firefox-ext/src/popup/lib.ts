@@ -9,6 +9,7 @@
  */
 
 import type { Config, Entry, Vault } from "@localpass/core";
+import { addEntry, deleteEntry } from "@localpass/core/dist/vault.js";
 import { SESSION_VAULT_KEY, clearPendingCredentials, type CachedVault } from "../shared/vault-store";
 
 export {
@@ -239,6 +240,65 @@ export function entryToDraft(key: string, entry: Entry): EditDraft {
     custom,
     createdAt: entry.created_at,
   };
+}
+
+/**
+ * A "New item" draft prefilled from an existing entry, for a second account
+ * that shares most of its details. The OTP is left empty: a TOTP secret
+ * belongs to exactly one account, and a copied one produces codes the other
+ * account rejects.
+ */
+export function duplicateDraft(key: string, entry: Entry, entries: Record<string, unknown>): EditDraft {
+  return {
+    ...entryToDraft(key, entry),
+    originalKey: null,
+    key: copyName(key, entries),
+    otp: "",
+    createdAt: null,
+  };
+}
+
+/** `name (copy)`, then `name (copy 2)`, … — the first one not taken. */
+function copyName(key: string, entries: Record<string, unknown>): string {
+  const base = `${key} (copy)`;
+  if (!(base in entries)) return base;
+  for (let n = 2; ; n++) {
+    const candidate = `${key} (copy ${n})`;
+    if (!(candidate in entries)) return candidate;
+  }
+}
+
+/**
+ * What saving a draft does: add a new entry, update the entry in place, or
+ * rename it — which removes the entry under its old name.
+ */
+export type SaveKind = "new" | "update" | "rename";
+
+export function saveKind(draft: EditDraft): SaveKind {
+  if (draft.originalKey === null) return "new";
+  return draft.originalKey === draft.key.trim() ? "update" : "rename";
+}
+
+/** The confirmation shown before a rename, which drops the old name. */
+export function renameConfirmMessage(draft: EditDraft): string {
+  return (
+    `Rename "${draft.originalKey}" to "${draft.key.trim()}"?\n\n` +
+    `"${draft.originalKey}" will no longer exist. To keep it and add a new ` +
+    `item, cancel and use Duplicate instead.`
+  );
+}
+
+/**
+ * Apply a saved draft to the (freshly pulled) vault as `entry`. Returns an
+ * error message when the target name is already taken, otherwise null.
+ */
+export function applyDraft(vault: Vault, draft: EditDraft, entry: Entry): string | null {
+  const key = draft.key.trim();
+  const kind = saveKind(draft);
+  if (kind !== "update" && vault.entries[key]) return `Item "${key}" already exists`;
+  if (kind === "rename" && draft.originalKey !== null) deleteEntry(vault, draft.originalKey);
+  addEntry(vault, key, entry);
+  return null;
 }
 
 export function newDraft(): EditDraft {
