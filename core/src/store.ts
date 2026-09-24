@@ -6,7 +6,7 @@
 
 import { decrypt, encrypt } from "./crypto.js";
 import type { Vault } from "./vault.js";
-import { SUPPORTED_VAULT_VERSION, newVault } from "./vault.js";
+import { SUPPORTED_VAULT_VERSION, ensureIds, newVault } from "./vault.js";
 
 /** Saving a vault newer than SUPPORTED_VAULT_VERSION was refused. */
 export class VaultVersionError extends Error {
@@ -44,13 +44,16 @@ export async function loadStore(
 
 /**
  * Serialize, encrypt, and return a vault as encrypted bytes. Throws
- * VaultVersionError for a vault newer than SUPPORTED_VAULT_VERSION.
+ * VaultVersionError for a vault newer than SUPPORTED_VAULT_VERSION. Entries
+ * without an ID get one, in place (see ensureIds), so the caller's copy
+ * matches what was saved.
  */
 export async function saveStore(
   vault: Vault,
   primaryPassword: string
 ): Promise<Uint8Array> {
   if (vault.version > SUPPORTED_VAULT_VERSION) throw new VaultVersionError(vault.version);
+  ensureIds(vault);
   const json = JSON.stringify(vault);
   const plaintext = new TextEncoder().encode(json);
   return await encrypt(plaintext, primaryPassword);

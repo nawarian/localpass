@@ -25,6 +25,9 @@ type Vault struct {
 // Any other keys are treated as custom metadata (e.g. "OTP Secret", "recovery_code").
 // It's (un)marshaled by the methods in compat.go.
 type Entry struct {
+	// ID identifies the entry independently of its name (the map key), so it
+	// survives renames. Assigned on save by EnsureIDs.
+	ID        string
 	Metadata  map[string]string
 	CreatedAt time.Time
 	UpdatedAt time.Time

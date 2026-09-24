@@ -57,7 +57,7 @@ func TestUnknownFieldsSurviveEditAndDelete(t *testing.T) {
 	}
 	// Edit one entry the way `set` does (new Entry, Extra carried over), drop another.
 	old := v.Entries["github"]
-	v.AddEntry("github", Entry{Metadata: map[string]string{"password": "changed"}, CreatedAt: old.CreatedAt, UpdatedAt: time.Now(), Extra: old.Extra})
+	v.AddEntry("github", Entry{ID: old.ID, Metadata: map[string]string{"password": "changed"}, CreatedAt: old.CreatedAt, UpdatedAt: time.Now(), Extra: old.Extra})
 	v.DeleteEntry("gitlab")
 	v.AddEntry("new", Entry{Metadata: map[string]string{"password": "n"}})
 	if err := SaveStore(path, v, "pass"); err != nil {
@@ -78,8 +78,8 @@ func TestUnknownFieldsSurviveEditAndDelete(t *testing.T) {
 	if _, ok := out["entries"].(map[string]any)["gitlab"]; ok {
 		t.Fatal("deleted entry came back")
 	}
-	if n := out["entries"].(map[string]any)["new"].(map[string]any); len(n) != 3 {
-		t.Fatalf("new entry should only have the known fields, got %v", n)
+	if n := out["entries"].(map[string]any)["new"].(map[string]any); len(n) != 4 || n["id"] == "" {
+		t.Fatalf("new entry should have just the known fields and an id, got %v", n)
 	}
 }
 

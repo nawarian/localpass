@@ -29,6 +29,7 @@ type vaultFields struct {
 }
 
 type entryFields struct {
+	ID        string            `json:"id,omitempty"`
 	Metadata  map[string]string `json:"metadata"`
 	CreatedAt time.Time         `json:"created_at"`
 	UpdatedAt time.Time         `json:"updated_at"`
@@ -59,17 +60,17 @@ func (e *Entry) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &known); err != nil {
 		return err
 	}
-	extra, err := unknownFields(data, "metadata", "created_at", "updated_at")
+	extra, err := unknownFields(data, "id", "metadata", "created_at", "updated_at")
 	if err != nil {
 		return err
 	}
-	*e = Entry{Metadata: known.Metadata, CreatedAt: known.CreatedAt, UpdatedAt: known.UpdatedAt, Extra: extra}
+	*e = Entry{ID: known.ID, Metadata: known.Metadata, CreatedAt: known.CreatedAt, UpdatedAt: known.UpdatedAt, Extra: extra}
 	return nil
 }
 
 // MarshalJSON encodes the known fields plus Extra.
 func (e Entry) MarshalJSON() ([]byte, error) {
-	return marshalWithExtra(entryFields{Metadata: e.Metadata, CreatedAt: e.CreatedAt, UpdatedAt: e.UpdatedAt}, e.Extra)
+	return marshalWithExtra(entryFields{ID: e.ID, Metadata: e.Metadata, CreatedAt: e.CreatedAt, UpdatedAt: e.UpdatedAt}, e.Extra)
 }
 
 // unknownFields returns the members of the JSON object data not named in known.
